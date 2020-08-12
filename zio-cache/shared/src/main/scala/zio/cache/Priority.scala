@@ -41,10 +41,12 @@ sealed abstract class Priority[-Value] { self =>
    */
   final def flip: Priority[Value] =
     Priority((now, left, right) => compare(now, left, right).flip)
+
+  // TODO: Implement
+  final def ordering[Value1 <: Value]: Ordering[Entry[Value1]] = ???
 }
 
 object Priority {
-
   /**
    * Constructs a `Priority` from a function that computes a relative ranking
    * given the current time and two entries.

@@ -1,6 +1,8 @@
 package zio.cache
 
-import zio.{ IO, ZIO }
+import zio.{ IO, Promise, Ref, ZIO }
+
+// import java.time.Instant
 
 /**
  * A `Cache[Key, Error, Value]` is an interface to a cache with keys of type
@@ -17,7 +19,6 @@ trait Cache[-Key, +Error, +Value] {
 }
 
 object Cache {
-
   /**
    * Creates a cache with a specified capacity and lookup function.
    */
@@ -26,12 +27,42 @@ object Cache {
     policy: CachingPolicy[Value],
     lookup: Lookup[Key, R, E, Value]
   ): ZIO[R, Nothing, Cache[Key, E, Value]] =
-    ZIO.environment[R].map { env =>
-      val _ = capacity
-      val _ = policy
+    ZIO.environment[R].flatMap { env =>
+      type MapType = Map[Key, Promise[E, Value]]
 
-      new Cache[Key, E, Value] {
-        def get(key: Key): IO[E, Value] = lookup(key).provide(env)
+      val _ = capacity 
+      val _ = policy 
+
+      // def evictExpiredEntries(now: Instant, map: MapType): MapType = 
+      //   map.filter { case (key, value) => policy.evict.evict(now, ???) }
+
+      // def toEntry(value: Value): Entry[Value] = ???
+
+      def addAndPrune(map: MapType, key: Key, promise: Promise[E, Value]): MapType = 
+        if (map.size >= capacity) map else map + (key -> promise)
+
+      // 1. Do NOT store failed promises inside the map 
+      //    Instead: handle "delay failures" using Lookup
+
+      Ref.make[MapType](Map()).map { ref =>
+        new Cache[Key, E, Value] {
+          def get(key: Key): IO[E, Value] = 
+            ZIO.uninterruptibleMask { restore =>
+              for {
+                promise  <- Promise.make[E, Value]
+                await    <- ref.modify[IO[E, Value]] { map =>
+                              map.get(key) match {
+                                case Some(promise) => (restore(promise.await), map)
+                                case None => 
+                                  val lookupValue = restore(lookup(key)).to(promise).provide(env)
+
+                                  (lookupValue *> restore(promise.await), addAndPrune(map, key, promise))
+                              }
+                            }
+                value    <- await 
+              } yield value
+            }
+        }
       }
     }
 }
