@@ -12,6 +12,11 @@ import zio.internal.Platform
 import scalacache._
 import scalacache.caffeine._
 
+/**
+  * 8/26/2020:    FillBenchmark.zioCacheFill   10000  thrpt    3  65.278 ∩┐╜ 1.741  ops/s
+  * (EntryStats): FillBenchmark.zioCacheFill   10000  thrpt    3  58.841 ∩┐╜ 8.347  ops/s
+  *
+  */
 @State(Scope.Thread)
 @BenchmarkMode(Array(Mode.Throughput))
 @OutputTimeUnit(TimeUnit.SECONDS)
@@ -20,8 +25,9 @@ class FillBenchmark extends BootstrapRuntime {
 
   @Param(Array("10000"))
   var size: Int = _
-  var strings: Array[String] = _
 
+  var strings: Array[String] = _
+ 
   @Setup(Level.Trial)
   def initializeStrings() = {
     strings = (0 until size).map(_.toString).toArray
@@ -35,6 +41,8 @@ class FillBenchmark extends BootstrapRuntime {
       for {
         cache <- Cache.make(size, CachingPolicy.byLastAccess, identityLookup)
         _     <- ZIO.foreach_(strings)(cache.get(_))
+        size0 <- cache.size
+        _     <- ZIO.effect(Predef.assert(size0 == size))
       } yield ()
     )
   }

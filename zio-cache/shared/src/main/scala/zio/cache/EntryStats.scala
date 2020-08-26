@@ -33,3 +33,7 @@ final case class EntryStats(
 
   def size: Long = accSize / loads
 }
+object EntryStats {
+  def make(now: Instant): EntryStats = 
+    EntryStats(now, now, now, 1L, 0L, 1L, 0L, 0L, Duration.ZERO)
+}

@@ -1,5 +1,7 @@
 package zio.cache
 
+import java.time.Instant
+
 import zio.{ IO, Promise, Ref, UIO, ZIO }
 
 /**
@@ -18,6 +20,21 @@ trait Cache[-Key, +Error, +Value] {
   def size: UIO[Int]
 }
 
+/*
+
+Benchmarks:
+
+ Parameters: size of the cache
+
+ * Fill benchmark: time to fill it up from empty state
+ * `get` times: how long does it take to get something out of the cache?
+   * Case 1: Cache is populated with value being retrieved
+   * Case 2: Cache is NOT populated with value being retrieved
+     Baseline: 600k unpopulated gets/second
+ * Frequent eviction
+ * Least-recently used / accessed (high churn)
+
+*/
 object Cache {
 
   /**
@@ -29,9 +46,8 @@ object Cache {
     lookup: Lookup[Key, R, E, Value]
   ): ZIO[R, Nothing, Cache[Key, E, Value]] =
     ZIO.environment[R].flatMap { env =>
-      type MapType = Map[Key, Promise[E, Value]]
+      type MapType = Map[Key, (EntryStats, Promise[E, Value])]
 
-      val _ = capacity
       val _ = policy
 
       // def evictExpiredEntries(now: Instant, map: MapType): MapType =
@@ -39,8 +55,11 @@ object Cache {
 
       // def toEntry(value: Value): Entry[Value] = ???
 
-      def addAndPrune(map: MapType, key: Key, promise: Promise[E, Value]): MapType =
-        if (map.size >= capacity) map else map + (key -> promise)
+      def addAndPrune(now: Instant, map: MapType, key: Key, promise: Promise[E, Value]): MapType = {
+        val entryStats = EntryStats.make(now)
+
+        if (map.size >= capacity) map else map.updated(key, entryStats -> promise)
+      }
 
       // 1. Do NOT store failed promises inside the map
       //    Instead: handle "delay failures" using Lookup
@@ -48,16 +67,18 @@ object Cache {
       Ref.make[MapType](Map()).map { ref =>
         new Cache[Key, E, Value] {
           def get(key: Key): IO[E, Value] =
-            ZIO.uninterruptibleMask { restore =>
+           ZIO.uninterruptibleMask { restore =>
               for {
                 promise <- Promise.make[E, Value]
                 await <- ref.modify[IO[E, Value]] { map =>
                           map.get(key) match {
-                            case Some(promise) => (restore(promise.await), map)
+                            case Some((_, promise)) => (restore(promise.await), map)
                             case None =>
+                              val now = Instant.now()
+
                               val lookupValue = restore(lookup(key)).to(promise).provide(env)
 
-                              (lookupValue *> restore(promise.await), addAndPrune(map, key, promise))
+                              (lookupValue *> promise.await, addAndPrune(now, map, key, promise))
                           }
                         }
                 value <- await
