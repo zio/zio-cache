@@ -60,6 +60,35 @@ lazy val zioCacheJS = zioCache.js
 lazy val zioCacheJVM = zioCache.jvm
   .settings(dottySettings)
 
+lazy val zioCacheBenchmarks = project
+  .in(file("benchmarks"))
+  .dependsOn(zioCacheJVM)
+  .enablePlugins(JmhPlugin)
+  .settings(buildInfoSettings("zio.cache"))
+  
+  .settings(
+    skip in publish := true,
+    unusedCompileDependenciesFilter -= libraryDependencies.value
+      .map(moduleid => moduleFilter(organization = moduleid.organization, name = moduleid.name))
+      .reduce(_ | _),
+    scalacOptions in Compile in console := Seq(
+      "-Ypartial-unification",
+      "-language:higherKinds",
+      "-language:existentials",
+      "-Yno-adapted-args",
+      "-Xsource:2.13",
+      "-Yrepl-class-based"
+    ),
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio"          % zioVersion,
+      "com.github.cb372" % "scalacache-core_2.12"     % "0.28.0",
+      "com.github.cb372" % "scalacache-caffeine_2.12" % "0.28.0",
+      "dev.zio" %% "zio-test"     % zioVersion % "test",
+      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
+    )
+  )
+  .settings(testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"))
+
 lazy val docs = project
   .in(file("zio-cache-docs"))
   .settings(

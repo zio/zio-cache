@@ -1,8 +1,6 @@
 package zio.cache
 
-import zio.{ IO, Promise, Ref, ZIO }
-
-// import java.time.Instant
+import zio.{ IO, Promise, Ref, UIO, ZIO }
 
 /**
  * A `Cache[Key, Error, Value]` is an interface to a cache with keys of type
@@ -16,9 +14,12 @@ import zio.{ IO, Promise, Ref, ZIO }
  */
 trait Cache[-Key, +Error, +Value] {
   def get(k: Key): IO[Error, Value]
+
+  def size: UIO[Int]
 }
 
 object Cache {
+
   /**
    * Creates a cache with a specified capacity and lookup function.
    */
@@ -30,38 +31,40 @@ object Cache {
     ZIO.environment[R].flatMap { env =>
       type MapType = Map[Key, Promise[E, Value]]
 
-      val _ = capacity 
-      val _ = policy 
+      val _ = capacity
+      val _ = policy
 
-      // def evictExpiredEntries(now: Instant, map: MapType): MapType = 
+      // def evictExpiredEntries(now: Instant, map: MapType): MapType =
       //   map.filter { case (key, value) => policy.evict.evict(now, ???) }
 
       // def toEntry(value: Value): Entry[Value] = ???
 
-      def addAndPrune(map: MapType, key: Key, promise: Promise[E, Value]): MapType = 
+      def addAndPrune(map: MapType, key: Key, promise: Promise[E, Value]): MapType =
         if (map.size >= capacity) map else map + (key -> promise)
 
-      // 1. Do NOT store failed promises inside the map 
+      // 1. Do NOT store failed promises inside the map
       //    Instead: handle "delay failures" using Lookup
 
       Ref.make[MapType](Map()).map { ref =>
         new Cache[Key, E, Value] {
-          def get(key: Key): IO[E, Value] = 
+          def get(key: Key): IO[E, Value] =
             ZIO.uninterruptibleMask { restore =>
               for {
-                promise  <- Promise.make[E, Value]
-                await    <- ref.modify[IO[E, Value]] { map =>
-                              map.get(key) match {
-                                case Some(promise) => (restore(promise.await), map)
-                                case None => 
-                                  val lookupValue = restore(lookup(key)).to(promise).provide(env)
+                promise <- Promise.make[E, Value]
+                await <- ref.modify[IO[E, Value]] { map =>
+                          map.get(key) match {
+                            case Some(promise) => (restore(promise.await), map)
+                            case None =>
+                              val lookupValue = restore(lookup(key)).to(promise).provide(env)
 
-                                  (lookupValue *> restore(promise.await), addAndPrune(map, key, promise))
-                              }
-                            }
-                value    <- await 
+                              (lookupValue *> restore(promise.await), addAndPrune(map, key, promise))
+                          }
+                        }
+                value <- await
               } yield value
             }
+
+          def size: UIO[Int] = ref.get.map(_.size)
         }
       }
     }

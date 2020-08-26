@@ -47,6 +47,7 @@ sealed abstract class Priority[-Value] { self =>
 }
 
 object Priority {
+
   /**
    * Constructs a `Priority` from a function that computes a relative ranking
    * given the current time and two entries.
