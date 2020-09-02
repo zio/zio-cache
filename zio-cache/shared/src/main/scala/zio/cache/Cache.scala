@@ -17,6 +17,8 @@ import zio.{ IO, Promise, Ref, UIO, ZIO }
 trait Cache[-Key, +Error, +Value] {
   def get(k: Key): IO[Error, Value]
 
+  def contains(k: Key): UIO[Boolean]
+
   def size: UIO[Int]
 }
 
@@ -28,13 +30,13 @@ Benchmarks:
 
  * Fill benchmark: time to fill it up from empty state
  * `get` times: how long does it take to get something out of the cache?
-   * Case 1: Cache is populated with value being retrieved
-   * Case 2: Cache is NOT populated with value being retrieved
+ * Case 1: Cache is populated with value being retrieved
+ * Case 2: Cache is NOT populated with value being retrieved
      Baseline: 600k unpopulated gets/second
  * Frequent eviction
  * Least-recently used / accessed (high churn)
 
-*/
+ */
 object Cache {
 
   /**
@@ -67,7 +69,7 @@ object Cache {
       Ref.make[MapType](Map()).map { ref =>
         new Cache[Key, E, Value] {
           def get(key: Key): IO[E, Value] =
-           ZIO.uninterruptibleMask { restore =>
+            ZIO.uninterruptibleMask { restore =>
               for {
                 promise <- Promise.make[E, Value]
                 await <- ref.modify[IO[E, Value]] { map =>
@@ -84,6 +86,8 @@ object Cache {
                 value <- await
               } yield value
             }
+
+          def contains(k: Key): UIO[Boolean] = ref.get.map(_.contains(k))
 
           def size: UIO[Int] = ref.get.map(_.size)
         }

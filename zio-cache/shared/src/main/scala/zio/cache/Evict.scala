@@ -22,6 +22,8 @@ object Evict {
 
   val all: Evict[Any] = Evict[Any]((_, _) => true)
 
+  def equalTo[A](value: A): Evict[A] = Evict[A]((_, entry) => entry.value == value)
+
   def greaterThan(size: Long): Evict[Any] =
     Evict[Any]((_, entry) => entry.entryStats.curSize >= size)
 
