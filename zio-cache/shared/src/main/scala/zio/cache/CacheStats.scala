@@ -11,3 +11,6 @@ final case class CacheStats(
   evictions: Long,
   totalLoadTime: Duration
 )
+object CacheStats {
+  val initial = CacheStats(0, 0L, 0L, 0L, 0L, 0L, Duration.ZERO)
+}

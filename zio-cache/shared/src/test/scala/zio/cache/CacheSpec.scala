@@ -30,14 +30,14 @@ object CacheSpec extends DefaultRunnableSpec {
         size  <- cache.size 
       } yield assert(size)(equalTo(1))
     },
-    testM("cache will not store rejected values") {
+    testM("cache will not store values that should be evicted") {
       for {
         cache <- Cache.make(20, CachingPolicy(Priority.any, Evict.equalTo("Sherlock")), identityLookup)
         _     <- cache.get("Sherlock") *> cache.get("Holmes")
         size  <- cache.size 
       } yield assert(size)(equalTo(1))
-    } @@ ignore,
-    testM("cache will ") {
+    },
+    testM("cache will respecting priority when evicting on a full cache") {
       for {
         cache <- Cache.make(1, CachingPolicy(Priority.fromOrderingValue[String].flip, Evict.none), identityLookup)
         _      <- cache.get("Apple") *> cache.get("Banana")

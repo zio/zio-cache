@@ -2,7 +2,7 @@ package zio.cache
 
 import java.time.Instant
 
-import zio.{ IO, Promise, Ref, UIO, ZIO }
+import zio.{ Exit, IO, Promise, Ref, UIO, ZIO }
 
 /**
  * A `Cache[Key, Error, Value]` is an interface to a cache with keys of type
@@ -48,7 +48,8 @@ object Cache {
     lookup: Lookup[Key, R, E, Value]
   ): ZIO[R, Nothing, Cache[Key, E, Value]] =
     ZIO.environment[R].flatMap { env =>
-      type MapType = Map[Key, (EntryStats, Promise[E, Value])]
+      type StateType = CacheState[Key, E, Value]
+      type MapType   = Map[Key, (EntryStats, Promise[E, Value])]
 
       val _ = policy
 
@@ -57,40 +58,64 @@ object Cache {
 
       // def toEntry(value: Value): Entry[Value] = ???
 
-      def addAndPrune(now: Instant, map: MapType, key: Key, promise: Promise[E, Value]): MapType = {
+      def addAndPrune(now: Instant, state: StateType, key: Key, promise: Promise[E, Value]): MapType = {
+        val map        = state.map
         val entryStats = EntryStats.make(now)
 
         if (map.size >= capacity) map else map.updated(key, entryStats -> promise)
       }
 
+      def evictIfNecessary(ref: Ref[StateType], now: Instant, key: Key, entryStats: EntryStats, exit: Exit[E, Value], cacheStats: CacheStats): IO[E, Value] =
+        exit.fold(
+          cause => ZIO.halt(cause),
+          value => {
+            val entry = Entry(cacheStats, entryStats, value)
+
+            if (policy.evict.evict(now, entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
+            else ZIO.succeed(value)
+          }
+        )
+
       // 1. Do NOT store failed promises inside the map
       //    Instead: handle "delay failures" using Lookup
 
-      Ref.make[MapType](Map()).map { ref =>
+      Ref.make[StateType](CacheState.initial).map { ref =>
         new Cache[Key, E, Value] {
           def get(key: Key): IO[E, Value] =
             ZIO.uninterruptibleMask { restore =>
               for {
                 promise <- Promise.make[E, Value]
-                await <- ref.modify[IO[E, Value]] { map =>
+                await <- ref.modify[IO[E, Value]] { state =>
+                          val cacheStats = state.cacheStats
+                          val map = state.map
+
                           map.get(key) match {
-                            case Some((_, promise)) => (restore(promise.await), map)
+                            case Some((_, promise)) => (restore(promise.await), state.copy(map = map))
                             case None =>
                               val now = Instant.now()
 
-                              val lookupValue = restore(lookup(key)).to(promise).provide(env)
+                              val lookupValue: UIO[Exit[E, Value]] = 
+                                restore(lookup(key)).run.flatMap(exit => promise.done(exit).as(exit)).provide(env)
 
-                              (lookupValue *> promise.await, addAndPrune(now, map, key, promise))
+                              (
+                                lookupValue.flatMap(exit => evictIfNecessary(ref, now, key, EntryStats.make(now), exit, cacheStats)),
+                                state.copy(map = addAndPrune(now, state, key, promise))
+                              )
                           }
                         }
                 value <- await
               } yield value
             }
 
-          def contains(k: Key): UIO[Boolean] = ref.get.map(_.contains(k))
+          def contains(k: Key): UIO[Boolean] = ref.get.map(_.map.contains(k))
 
-          def size: UIO[Int] = ref.get.map(_.size)
+          def size: UIO[Int] = ref.get.map(_.map.size)
         }
       }
     }
+
+  private case class CacheState[Key, E, Value](cacheStats: CacheStats, map: Map[Key, (EntryStats, Promise[E, Value])])
+  private object CacheState {
+    def initial[Key, E, Value]: CacheState[Key, E, Value] = CacheState(CacheStats.initial, Map())
+  }
 }
