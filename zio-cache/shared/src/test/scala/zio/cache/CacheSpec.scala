@@ -3,7 +3,6 @@ package zio.cache
 import zio._
 import zio.test._
 import zio.test.Assertion._
-import zio.test.TestAspect._
 
 object CacheSpec extends DefaultRunnableSpec {
   val identityLookup = 
@@ -45,6 +44,6 @@ object CacheSpec extends DefaultRunnableSpec {
         rez2   <- cache.contains("Apple")
         size  <- cache.size 
       } yield assert(rez1)(isTrue) && assert(rez2)(isFalse) && assert(size)(equalTo(1))
-    } @@ ignore
+    }
   )
 }

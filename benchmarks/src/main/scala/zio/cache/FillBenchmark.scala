@@ -13,9 +13,11 @@ import scalacache._
 import scalacache.caffeine._
 
 /**
-  * 8/26/2020:       FillBenchmark.zioCacheFill   10000  thrpt    3  65.278 ∩┐╜ 1.741  ops/s
-  * (EntryStats):    FillBenchmark.zioCacheFill   10000  thrpt    3  58.841 ∩┐╜ 8.347  ops/s
-  * (Promise.await): FillBenchmark.zioCacheFill   10000  thrpt    3  82.770 ∩┐╜ 4.233  ops/s
+  * 8/26/2020:            FillBenchmark.zioCacheFill   10000  thrpt    3  65.278 ∩┐╜ 1.741  ops/s
+  * (EntryStats):         FillBenchmark.zioCacheFill   10000  thrpt    3  58.841 ∩┐╜ 8.347  ops/s
+  * (eviction):           FillBenchmark.zioCacheFill   10000  thrpt    3  40.000 ∩┐╜ 8.347  ops/s
+  * (Promise.await):      FillBenchmark.zioCacheFill   10000  thrpt    3  82.770 ∩┐╜ 4.233  ops/s
+  * (Pending | Complete): FillBenchmark.zioCacheFill   10000  thrpt    3  67.379 ∩┐╜ 1.381  ops/s
   *
   */
 @State(Scope.Thread)

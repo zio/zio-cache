@@ -49,7 +49,7 @@ object Cache {
   ): ZIO[R, Nothing, Cache[Key, E, Value]] =
     ZIO.environment[R].flatMap { env =>
       type StateType = CacheState[Key, E, Value]
-      type MapType   = Map[Key, (EntryStats, Promise[E, Value])]
+      type MapType   = Map[Key, MapEntry[E, Value]]
 
       val _ = policy
 
@@ -62,17 +62,42 @@ object Cache {
         val map        = state.map
         val entryStats = EntryStats.make(now)
 
-        if (map.size >= capacity) map else map.updated(key, entryStats -> promise)
+        if (map.size >= capacity) map
+        else map.updated(key, MapEntry(entryStats, MapValue.Pending(promise)))
       }
 
-      def evictIfNecessary(ref: Ref[StateType], now: Instant, key: Key, entryStats: EntryStats, exit: Exit[E, Value], cacheStats: CacheStats): IO[E, Value] =
+      def doBookkeeping(
+        ref: Ref[StateType],
+        now: Instant,
+        key: Key,
+        entryStats: EntryStats,
+        exit: Exit[E, Value],
+        cacheStats: CacheStats
+      ): IO[E, Value] =
         exit.fold(
-          cause => ZIO.halt(cause),
+          cause => ZIO.halt(cause), // TODO: Remove the promise from the map, if it exists in the map
           value => {
             val entry = Entry(cacheStats, entryStats, value)
 
             if (policy.evict.evict(now, entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
-            else ZIO.succeed(value)
+            else
+              ref.update {
+                state =>
+                  val map = state.map
+
+                  state.copy(map = if (map.size >= capacity) {
+                    map.collect {
+                      case (key, MapEntry(entryStats, MapValue.Complete(Exit.Success(value)))) =>
+                        (key, Entry(cacheStats, entryStats, value))
+                    }.toArray.sortBy(_._2)(policy.priority.toOrdering(now)).lastOption match {
+                      case Some((lastKey, lastEntry)) =>
+                        if (policy.priority.compare(now, lastEntry, entry) == CacheWorth.Left) map
+                        else (map - lastKey) + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
+
+                      case None => map // TODO: What if map is filled with incomplete promises???
+                    }
+                  } else map + (key -> MapEntry(entryStats, MapValue.Complete(exit))))
+              }.as(value)
           }
         )
 
@@ -87,18 +112,21 @@ object Cache {
                 promise <- Promise.make[E, Value]
                 await <- ref.modify[IO[E, Value]] { state =>
                           val cacheStats = state.cacheStats
-                          val map = state.map
+                          val map        = state.map
 
                           map.get(key) match {
-                            case Some((_, promise)) => (restore(promise.await), state.copy(map = map))
+                            case Some(MapEntry(_, MapValue.Pending(promise))) => (restore(promise.await), state)
+                            case Some(MapEntry(_, MapValue.Complete(exit)))   => (IO.done(exit), state)
                             case None =>
                               val now = Instant.now()
 
-                              val lookupValue: UIO[Exit[E, Value]] = 
+                              val lookupValue: UIO[Exit[E, Value]] =
                                 restore(lookup(key)).run.flatMap(exit => promise.done(exit).as(exit)).provide(env)
 
                               (
-                                lookupValue.flatMap(exit => evictIfNecessary(ref, now, key, EntryStats.make(now), exit, cacheStats)),
+                                lookupValue.flatMap(exit =>
+                                  doBookkeeping(ref, now, key, EntryStats.make(now), exit, cacheStats)
+                                ),
                                 state.copy(map = addAndPrune(now, state, key, promise))
                               )
                           }
@@ -114,7 +142,14 @@ object Cache {
       }
     }
 
-  private case class CacheState[Key, E, Value](cacheStats: CacheStats, map: Map[Key, (EntryStats, Promise[E, Value])])
+  private final case class MapEntry[+Error, +Value](entryStats: EntryStats, mapValue: MapValue[Error, Value])
+  private sealed trait MapValue[+Error, +Value]
+  private object MapValue {
+    final case class Pending[Error, Value](promise: Promise[Error, Value]) extends MapValue[Error, Value]
+    final case class Complete[+Error, +Value](exit: Exit[Error, Value])    extends MapValue[Error, Value]
+  }
+
+  private case class CacheState[Key, +Error, +Value](cacheStats: CacheStats, map: Map[Key, MapEntry[Error, Value]])
   private object CacheState {
     def initial[Key, E, Value]: CacheState[Key, E, Value] = CacheState(CacheStats.initial, Map())
   }

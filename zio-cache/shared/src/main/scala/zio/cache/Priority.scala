@@ -42,8 +42,15 @@ sealed abstract class Priority[-Value] { self =>
   final def flip: Priority[Value] =
     Priority((now, left, right) => compare(now, left, right).flip)
 
-  // TODO: Implement
-  final def ordering[Value1 <: Value]: Ordering[Entry[Value1]] = ???
+  final def toOrdering[Value1 <: Value](now: Instant): Ordering[Entry[Value1]] =
+    new Ordering[Entry[Value1]] {
+      def compare(l: Entry[Value1], r: Entry[Value1]): Int =
+        self.compare(now, l, r) match {
+          case CacheWorth.Left  => -1
+          case CacheWorth.Equal => 0
+          case CacheWorth.Right => 1
+        }
+    }
 }
 
 object Priority {
