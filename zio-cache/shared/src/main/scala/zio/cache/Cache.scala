@@ -83,20 +83,26 @@ object Cache {
             else
               ref.update {
                 state =>
-                  val map = state.map
+                  val map = state.map + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
 
-                  state.copy(map = if (map.size >= capacity) {
-                    map.collect {
-                      case (key, MapEntry(entryStats, MapValue.Complete(Exit.Success(value)))) =>
-                        (key, Entry(cacheStats, entryStats, value))
-                    }.toArray.sortBy(_._2)(policy.priority.toOrdering(now)).lastOption match {
-                      case Some((lastKey, lastEntry)) =>
-                        if (policy.priority.compare(now, lastEntry, entry) == CacheWorth.Left) map
-                        else (map - lastKey) + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
+                  val newMap =
+                    if (map.size > capacity) {
+                      val sorted = map.collect {
+                        case (key, MapEntry(entryStats, MapValue.Complete(Exit.Success(value)))) =>
+                          (key, Entry(cacheStats, entryStats, value))
+                      }.toArray.sortBy(_._2)(policy.priority.toOrdering(now))
 
-                      case None => map // TODO: What if map is filled with incomplete promises???
-                    }
-                  } else map + (key -> MapEntry(entryStats, MapValue.Complete(exit))))
+                      sorted.lastOption match {
+                        case Some((lastKey, lastEntry)) =>
+                          if (key == lastKey) map - key
+                          else if (policy.priority.compare(now, lastEntry, entry) == CacheWorth.Left) map
+                          else (map - lastKey) + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
+
+                        case None => map - key // TODO: What if map is filled with incomplete promises???
+                      }
+                    } else map
+
+                  state.copy(map = newMap)
               }.as(value)
           }
         )

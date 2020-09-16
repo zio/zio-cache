@@ -78,8 +78,8 @@ object Priority {
   def fromOrdering[A](proj: Entry[Any] => A)(implicit ord: Ordering[A]): Priority[Any] =
     Priority { (_, left, right) =>
       val compare = ord.compare(proj(left), proj(right))
-      if (compare < 0) CacheWorth.Right
-      else if (compare > 0) CacheWorth.Left
+      if (compare < 0) CacheWorth.Left
+      else if (compare > 0) CacheWorth.Right
       else CacheWorth.Equal
     }
 
@@ -90,8 +90,8 @@ object Priority {
   def fromOrderingValue[A](implicit ord: Ordering[A]): Priority[A] =
     Priority { (_, left, right) =>
       val compare = ord.compare(left.value, right.value)
-      if (compare < 0) CacheWorth.Right
-      else if (compare > 0) CacheWorth.Left
+      if (compare < 0) CacheWorth.Left
+      else if (compare > 0) CacheWorth.Right
       else CacheWorth.Equal
     }
 }
