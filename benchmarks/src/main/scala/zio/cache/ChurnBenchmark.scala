@@ -16,7 +16,8 @@ import scalacache.caffeine._
   * (Baseline)            ChurnBenchmark.zioCacheChurn   10000  thrpt    3  113.703 ∩┐╜ 2.392  ops/s
   * (Pending | Complete): ChurnBenchmark.zioCacheChurn   10000  thrpt    3  105.944 ∩┐╜ 5.873  ops/s
   * 
-  *  0.020 ops/s
+  * [info] ChurnBenchmark.zioCacheChurn   10000  thrpt    3  0.018 ∩┐╜ 0.001  ops/s
+  * [info] ChurnBenchmark.zioCacheChurn   10000  thrpt    3  0.059 ∩┐╜ 0.015  ops/s
   */
 @State(Scope.Thread)
 @BenchmarkMode(Array(Mode.Throughput))

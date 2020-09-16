@@ -71,13 +71,12 @@ object Cache {
         now: Instant,
         key: Key,
         entryStats: EntryStats,
-        exit: Exit[E, Value],
-        cacheStats: CacheStats
+        exit: Exit[E, Value]
       ): IO[E, Value] =
         exit.fold(
           cause => ZIO.halt(cause), // TODO: Remove the promise from the map, if it exists in the map
           value => {
-            val entry = Entry(cacheStats, entryStats, value)
+            val entry = Entry(entryStats, value)
 
             if (policy.evict.evict(now, entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
             else
@@ -85,17 +84,18 @@ object Cache {
                 state =>
                   val map = state.map + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
 
+                  // Big oh for the lookup function: O(capacity * (log capacity))
                   val newMap =
                     if (map.size > capacity) {
                       val sorted = map.collect {
                         case (key, MapEntry(entryStats, MapValue.Complete(Exit.Success(value)))) =>
-                          (key, Entry(cacheStats, entryStats, value))
-                      }.toArray.sortBy(_._2)(policy.priority.toOrdering(now))
+                          (key, Entry(entryStats, value))
+                      }.toArray.sortBy(_._2)(policy.priority.toOrdering)
 
                       sorted.lastOption match {
                         case Some((lastKey, lastEntry)) =>
                           if (key == lastKey) map - key
-                          else if (policy.priority.compare(now, lastEntry, entry) == CacheWorth.Left) map
+                          else if (policy.priority.compare(lastEntry, entry) == CacheWorth.Left) map - key
                           else (map - lastKey) + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
 
                         case None => map - key // TODO: What if map is filled with incomplete promises???
@@ -112,13 +112,13 @@ object Cache {
 
       Ref.make[StateType](CacheState.initial).map { ref =>
         new Cache[Key, E, Value] {
+          // Must guarantee: O(1)
           def get(key: Key): IO[E, Value] =
             ZIO.uninterruptibleMask { restore =>
               for {
                 promise <- Promise.make[E, Value]
                 await <- ref.modify[IO[E, Value]] { state =>
-                          val cacheStats = state.cacheStats
-                          val map        = state.map
+                          val map = state.map
 
                           map.get(key) match {
                             case Some(MapEntry(_, MapValue.Pending(promise))) => (restore(promise.await), state)
@@ -130,9 +130,7 @@ object Cache {
                                 restore(lookup(key)).run.flatMap(exit => promise.done(exit).as(exit)).provide(env)
 
                               (
-                                lookupValue.flatMap(exit =>
-                                  doBookkeeping(ref, now, key, EntryStats.make(now), exit, cacheStats)
-                                ),
+                                lookupValue.flatMap(exit => doBookkeeping(ref, now, key, EntryStats.make(now), exit)),
                                 state.copy(map = addAndPrune(now, state, key, promise))
                               )
                           }

@@ -12,7 +12,7 @@ final case class CachingPolicy[-Value](priority: Priority[Value], evict: Evict[V
   def compare(now: Instant, left: Entry[Value], right: Entry[Value]): CacheWorth =
     if (evict.evict(now, left) && !evict.evict(now, right)) CacheWorth.Right
     else if (!evict.evict(now, left) && evict.evict(now, right)) CacheWorth.Left
-    else priority.compare(now, left, right)
+    else priority.compare(left, right)
 
   def ++[Value1 <: Value](that: CachingPolicy[Value1]): CachingPolicy[Value1] =
     self andThen that
