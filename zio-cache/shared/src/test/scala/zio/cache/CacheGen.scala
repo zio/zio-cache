@@ -44,10 +44,9 @@ object CacheGen {
 
   lazy val genEntry: Gen[Random, Entry[Any]] =
     for {
-      cacheStats <- genCacheStats
       entryStats <- genEntryStats
       value      <- Gen.anyInt
-    } yield Entry(cacheStats, entryStats, value)
+    } yield Entry(entryStats, value)
 
   lazy val genEntryStats: Gen[Random, EntryStats] =
     for {
@@ -85,5 +84,5 @@ object CacheGen {
     Gen.long(0, Long.MaxValue)
 
   lazy val genPriority: Gen[Random, Priority[Any]] =
-    Gen.function3[Random, Instant, Entry[Any], Entry[Any], CacheWorth](genCacheWorth).map(Priority(_))
+    Gen.function2[Random, Entry[Any], Entry[Any], CacheWorth](genCacheWorth).map(Priority(_))
 }
