@@ -66,7 +66,7 @@ object Cache {
         else map.updated(key, MapEntry(entryStats, MapValue.Pending(promise)))
       }
 
-      def doBookkeeping(
+      def recordEntry(
         ref: Ref[StateType],
         now: Instant,
         key: Key,
@@ -82,27 +82,23 @@ object Cache {
             else
               ref.update {
                 state =>
-                  val map = state.map + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
-
                   // Big oh for the lookup function: O(capacity * (log capacity))
-                  val newMap =
-                    if (map.size > capacity) {
-                      val sorted = map.collect {
-                        case (key, MapEntry(entryStats, MapValue.Complete(Exit.Success(value)))) =>
-                          (key, Entry(entryStats, value))
-                      }.toArray.sortBy(_._2)(policy.priority.toOrdering)
+                  val (newEntries, newMap) = {
+                    val newEntries = state.entries + (key -> entry)
+                    val newMap     = state.map + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
 
-                      sorted.lastOption match {
+                    if (newMap.size > capacity) {
+                      newEntries.lastOption match {
                         case Some((lastKey, lastEntry)) =>
-                          if (key == lastKey) map - key
-                          else if (policy.priority.compare(lastEntry, entry) == CacheWorth.Left) map - key
-                          else (map - lastKey) + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
+                          if (key != lastKey && policy.priority.compare(lastEntry, entry) == CacheWorth.Right) (newEntries, newMap - lastKey)
+                          else (state.entries, newMap - key)
 
-                        case None => map - key // TODO: What if map is filled with incomplete promises???
+                        case None => (state.entries, newMap - key) // TODO: What if map is filled with incomplete promises???
                       }
-                    } else map
+                    } else (newEntries, newMap)
+                  }
 
-                  state.copy(map = newMap)
+                  state.copy(entries = newEntries, map = newMap)
               }.as(value)
           }
         )
@@ -110,7 +106,7 @@ object Cache {
       // 1. Do NOT store failed promises inside the map
       //    Instead: handle "delay failures" using Lookup
 
-      Ref.make[StateType](CacheState.initial).map { ref =>
+      Ref.make[StateType](CacheState.initial(policy.priority.toOrdering)).map { ref =>
         new Cache[Key, E, Value] {
           // Must guarantee: O(1)
           def get(key: Key): IO[E, Value] =
@@ -130,7 +126,7 @@ object Cache {
                                 restore(lookup(key)).run.flatMap(exit => promise.done(exit).as(exit)).provide(env)
 
                               (
-                                lookupValue.flatMap(exit => doBookkeeping(ref, now, key, EntryStats.make(now), exit)),
+                                lookupValue.flatMap(exit => recordEntry(ref, now, key, EntryStats.make(now), exit)),
                                 state.copy(map = addAndPrune(now, state, key, promise))
                               )
                           }
@@ -146,6 +142,8 @@ object Cache {
       }
     }
 
+  import scala.collection.immutable.SortedSet
+
   private final case class MapEntry[+Error, +Value](entryStats: EntryStats, mapValue: MapValue[Error, Value])
   private sealed trait MapValue[+Error, +Value]
   private object MapValue {
@@ -153,8 +151,13 @@ object Cache {
     final case class Complete[+Error, +Value](exit: Exit[Error, Value])    extends MapValue[Error, Value]
   }
 
-  private case class CacheState[Key, +Error, +Value](cacheStats: CacheStats, map: Map[Key, MapEntry[Error, Value]])
+  private case class CacheState[Key, +Error, Value](cacheStats: CacheStats, entries: SortedSet[(Key, Entry[Value])], map: Map[Key, MapEntry[Error, Value]])
   private object CacheState {
-    def initial[Key, E, Value]: CacheState[Key, E, Value] = CacheState(CacheStats.initial, Map())
+    def initial[Key, E, Value](implicit ordering: Ordering[Entry[Value]]): CacheState[Key, E, Value] = {
+      implicit val tupleOrdering: Ordering[(Key, Entry[Value])] = 
+        Ordering.by(_._2)
+
+      CacheState(CacheStats.initial, SortedSet.empty[(Key, Entry[Value])], Map())
+    }
   }
 }
