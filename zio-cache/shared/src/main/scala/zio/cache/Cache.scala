@@ -85,15 +85,17 @@ object Cache {
                   // Big oh for the lookup function: O(capacity * (log capacity))
                   val (newEntries, newMap) = {
                     val newEntries = state.entries + (key -> entry)
-                    val newMap     = state.map + (key -> MapEntry(entryStats, MapValue.Complete(exit)))
+                    val newMap     = state.map + (key     -> MapEntry(entryStats, MapValue.Complete(exit)))
 
                     if (newMap.size > capacity) {
                       newEntries.lastOption match {
-                        case Some((lastKey, lastEntry)) =>
-                          if (key != lastKey && policy.priority.compare(lastEntry, entry) == CacheWorth.Right) (newEntries, newMap - lastKey)
+                        case Some(last @ (lastKey, lastEntry)) =>
+                          if (key != lastKey && policy.priority.compare(lastEntry, entry) == CacheWorth.Right)
+                            (newEntries - last, newMap - lastKey) // TODO: Make a test that ensures consistency between data structures
                           else (state.entries, newMap - key)
 
-                        case None => (state.entries, newMap - key) // TODO: What if map is filled with incomplete promises???
+                        case None =>
+                          (state.entries, newMap - key) // TODO: What if map is filled with incomplete promises???
                       }
                     } else (newEntries, newMap)
                   }
@@ -151,10 +153,14 @@ object Cache {
     final case class Complete[+Error, +Value](exit: Exit[Error, Value])    extends MapValue[Error, Value]
   }
 
-  private case class CacheState[Key, +Error, Value](cacheStats: CacheStats, entries: SortedSet[(Key, Entry[Value])], map: Map[Key, MapEntry[Error, Value]])
+  private case class CacheState[Key, +Error, Value](
+    cacheStats: CacheStats,
+    entries: SortedSet[(Key, Entry[Value])],
+    map: Map[Key, MapEntry[Error, Value]]
+  )
   private object CacheState {
     def initial[Key, E, Value](implicit ordering: Ordering[Entry[Value]]): CacheState[Key, E, Value] = {
-      implicit val tupleOrdering: Ordering[(Key, Entry[Value])] = 
+      implicit val tupleOrdering: Ordering[(Key, Entry[Value])] =
         Ordering.by(_._2)
 
       CacheState(CacheStats.initial, SortedSet.empty[(Key, Entry[Value])], Map())
