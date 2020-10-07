@@ -73,81 +73,96 @@ object Cache {
         entryStats: EntryStats,
         exit: Exit[E, Value]
       ): IO[E, Value] =
-        exit.fold(
-          cause => ZIO.halt(cause), // TODO: Remove the promise from the map, if it exists in the map
-          value => {
+        exit match {
+          case Exit.Failure(cause) => ZIO.halt(cause) // TODO: Remove the promise from the map, if it exists in the map
+          case Exit.Success(value) =>
             val entry = Entry(entryStats, value)
 
             if (policy.evict.evict(now, entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
             else
-              ref.update {
-                state =>
-                  // Big oh for the lookup function: O(capacity * (log capacity))
-                  val (newEntries, newMap) = {
-                    val newEntries = state.entries + (key -> entry)
-                    val newMap     = state.map + (key     -> MapEntry(entryStats, MapValue.Complete(exit)))
+              ref.update { state =>
+                val newEntries = state.entries + ((key, entry))
+                val newMap     = state.map.updated(key, MapEntry(entryStats, MapValue.Complete(exit)))
 
-                    if (newMap.size > capacity) {
-                      newEntries.lastOption match {
-                        case Some(last @ (lastKey, lastEntry)) =>
-                          if (key != lastKey && policy.priority.compare(lastEntry, entry) == CacheWorth.Right)
-                            (newEntries - last, newMap - lastKey) // TODO: Make a test that ensures consistency between data structures
-                          else (state.entries, newMap - key)
+                var newEntries2 = newEntries
+                var newMap2     = newMap
 
-                        case None =>
-                          (state.entries, newMap - key) // TODO: What if map is filled with incomplete promises???
-                      }
-                    } else (newEntries, newMap)
+                if (newMap.size > capacity) {
+                  if (newEntries.nonEmpty) {
+                    val last = newEntries.head
+
+                    val lastKey   = last._1
+                    val lastEntry = last._2
+
+                    if (key != lastKey && policy.priority.compare(lastEntry, entry) == CacheWorth.Right) {
+                      // The new entry has more priority than the old one:
+                      newEntries2 = newEntries - last
+                      newMap2 = newMap - lastKey // TODO: Make a test that ensures consistency between data structures
+                    } else {
+                      newEntries2 = state.entries
+                      newMap2 = newMap - key
+                    }
+                  } else {
+                    newEntries2 = state.entries
+                    newMap2 = newMap - key // TODO: What if map is filled with incomplete promises???
                   }
+                }
 
-                  state.copy(entries = newEntries, map = newMap)
-              }.as(value)
-          }
-        )
+                state.copy(entries = newEntries2, map = newMap2)
+              }.flatMap(_ => ZIO.succeedNow(value))
+        }
 
       // 1. Do NOT store failed promises inside the map
       //    Instead: handle "delay failures" using Lookup
 
-      Ref.make[StateType](CacheState.initial(policy.priority.toOrdering)).map { ref =>
-        new Cache[Key, E, Value] {
-          def trackHit(key: Key): UIO[Any] =
-            ref.update(_.updateCacheStats(CacheStats.addHit)) *>
-              ref.update(_.updateEntryStats(key)(EntryStats.addHit))
+      ZIO.fiberId.zip(Ref.make[StateType](CacheState.initial(policy.priority.toOrdering))).map {
+        case (fiberId, ref) =>
+          new Cache[Key, E, Value] {
+            val identityFn: IO[E, Value] => IO[E, Value] = v => v
 
-          def trackMiss: UIO[Any] = ref.update(_.updateCacheStats(CacheStats.addMiss))
+            def trackHit(key: Key): UIO[Any] =
+              ref.update { state =>
+                state.updateCacheStats(CacheStats.addHit).updateEntryStats(key)(EntryStats.addHit)
+              }
 
-          def get(key: Key): IO[E, Value] =
-            ZIO.uninterruptibleMask { restore =>
-              for {
-                promise <- Promise.make[E, Value]
-                await <- ref.modify[IO[E, Value]] { state =>
-                          val map = state.map
+            val trackMiss: UIO[Any] = ref.update(_.updateCacheStats(CacheStats.addMiss))
 
-                          map.get(key) match {
-                            case Some(MapEntry(_, MapValue.Pending(promise))) =>
-                              (trackHit(key) *> restore(promise.await), state)
-                            case Some(MapEntry(_, MapValue.Complete(exit))) => (trackHit(key) *> IO.done(exit), state)
-                            case None =>
-                              val now = Instant.now()
+            def get(key: Key): IO[E, Value] =
+              ZIO.uninterruptibleMask { restore =>
+                ref
+                  .modify[IO[E, Value]] { state =>
+                    val map = state.map
 
-                              val lookupValue: UIO[Exit[E, Value]] =
-                                restore(lookup(key)).run.flatMap(exit => promise.done(exit).as(exit)).provide(env)
+                    map.get(key) match {
+                      case Some(MapEntry(_, MapValue.Pending(promise))) =>
+                        (trackHit(key) *> restore(promise.await), state)
+                      case Some(MapEntry(_, MapValue.Complete(exit))) => (trackHit(key) *> IO.done(exit), state)
+                      case None =>
+                        val promise = Promise.unsafeMake[E, Value](fiberId)
+                        val now     = Instant.now()
 
-                              (
-                                trackMiss *> lookupValue
-                                  .flatMap(exit => recordEntry(ref, now, key, EntryStats.make(now), exit)),
-                                state.copy(map = addAndPrune(now, state, key, promise))
-                              )
-                          }
-                        }
-                value <- await
-              } yield value
-            }
+                        // provide decreases churn performance by 15 ops/second
+                        val lookupValue: UIO[Exit[E, Value]] =
+                          restore(lookup(key)).run
+                            .flatMap(exit => promise.done(exit).flatMap(_ => ZIO.succeedNow(exit)))
+                            .provide(env)
 
-          def contains(k: Key): UIO[Boolean] = ref.get.map(_.map.contains(k))
+                        (
+                          trackMiss.flatMap(_ =>
+                            lookupValue
+                              .flatMap(exit => recordEntry(ref, now, key, EntryStats.make(now), exit))
+                          ),
+                          state.copy(map = addAndPrune(now, state, key, promise))
+                        )
+                    }
+                  }
+                  .flatMap(identityFn)
+              }
 
-          def size: UIO[Int] = ref.get.map(_.map.size)
-        }
+            def contains(k: Key): UIO[Boolean] = ref.get.map(_.map.contains(k))
+
+            def size: UIO[Int] = ref.get.map(_.map.size)
+          }
       }
     }
 
@@ -177,7 +192,7 @@ object Cache {
   private object CacheState {
     def initial[Key, E, Value](implicit ordering: Ordering[Entry[Value]]): CacheState[Key, E, Value] = {
       implicit val tupleOrdering: Ordering[(Key, Entry[Value])] =
-        Ordering.by(_._2)
+        Ordering.by[(Key, Entry[Value]), Entry[Value]](_._2).reverse
 
       CacheState(CacheStats.initial, SortedSet.empty[(Key, Entry[Value])], Map())
     }

@@ -54,7 +54,6 @@ object CacheGen {
       accessed   <- genInstant
       loaded     <- genInstant
       hits       <- genPositiveLong
-      misses     <- genPositiveLong
       loads      <- genPositiveLong
       curSize    <- genPositiveLong
       accSize    <- genPositiveLong
@@ -64,7 +63,6 @@ object CacheGen {
       accessed,
       loaded,
       hits,
-      misses,
       loads,
       curSize,
       accSize,
