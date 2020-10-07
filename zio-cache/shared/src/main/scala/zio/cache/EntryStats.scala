@@ -23,17 +23,20 @@ final case class EntryStats(
   accessed: Instant,
   loaded: Instant,
   hits: Long,
-  misses: Long,
   loads: Long,
   curSize: Long,
   accSize: Long,
   accLoading: Duration
 ) {
-  def total: Long = hits + misses
-
   def size: Long = accSize / loads
 }
 object EntryStats {
   def make(now: Instant): EntryStats =
-    EntryStats(now, now, now, 1L, 0L, 1L, 0L, 0L, Duration.ZERO)
+    EntryStats(now, now, now, 1L, 1L, 0L, 0L, Duration.ZERO)
+
+  val addHit: EntryStats => EntryStats = v => v.copy(hits = v.hits + 1L)
+
+  val addLoad: EntryStats => EntryStats = v => v.copy(loads = v.loads + 1L)
+
+  def updateLoadedTime(time: Instant): EntryStats => EntryStats = v => v.copy(loaded = time)
 }

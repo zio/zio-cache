@@ -13,4 +13,15 @@ final case class CacheStats(
 )
 object CacheStats {
   val initial = CacheStats(0, 0L, 0L, 0L, 0L, 0L, Duration.ZERO)
+
+  val addHit: CacheStats => CacheStats = v => v.copy(hits = v.hits + 1L)
+
+  val addMiss: CacheStats => CacheStats = v => v.copy(hits = v.hits + 1L)
+
+  def addLoadTime(time: Long): CacheStats => CacheStats = v => v.copy(loads = v.loads + time)
+
+  def addEviction: CacheStats => CacheStats = v => v.copy(evictions = v.evictions + 1L)
+
+  def addTotalLoadTime(time: Duration): CacheStats => CacheStats =
+    v => v.copy(totalLoadTime = v.totalLoadTime.plus(time))
 }

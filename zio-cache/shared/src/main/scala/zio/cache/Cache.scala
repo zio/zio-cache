@@ -110,7 +110,12 @@ object Cache {
 
       Ref.make[StateType](CacheState.initial(policy.priority.toOrdering)).map { ref =>
         new Cache[Key, E, Value] {
-          // Must guarantee: O(1)
+          def trackHit(key: Key): UIO[Any] =
+            ref.update(_.updateCacheStats(CacheStats.addHit)) *>
+              ref.update(_.updateEntryStats(key)(EntryStats.addHit))
+
+          def trackMiss: UIO[Any] = ref.update(_.updateCacheStats(CacheStats.addMiss))
+
           def get(key: Key): IO[E, Value] =
             ZIO.uninterruptibleMask { restore =>
               for {
@@ -119,8 +124,9 @@ object Cache {
                           val map = state.map
 
                           map.get(key) match {
-                            case Some(MapEntry(_, MapValue.Pending(promise))) => (restore(promise.await), state)
-                            case Some(MapEntry(_, MapValue.Complete(exit)))   => (IO.done(exit), state)
+                            case Some(MapEntry(_, MapValue.Pending(promise))) =>
+                              (trackHit(key) *> restore(promise.await), state)
+                            case Some(MapEntry(_, MapValue.Complete(exit))) => (trackHit(key) *> IO.done(exit), state)
                             case None =>
                               val now = Instant.now()
 
@@ -128,7 +134,8 @@ object Cache {
                                 restore(lookup(key)).run.flatMap(exit => promise.done(exit).as(exit)).provide(env)
 
                               (
-                                lookupValue.flatMap(exit => recordEntry(ref, now, key, EntryStats.make(now), exit)),
+                                trackMiss *> lookupValue
+                                  .flatMap(exit => recordEntry(ref, now, key, EntryStats.make(now), exit)),
                                 state.copy(map = addAndPrune(now, state, key, promise))
                               )
                           }
@@ -157,7 +164,16 @@ object Cache {
     cacheStats: CacheStats,
     entries: SortedSet[(Key, Entry[Value])],
     map: Map[Key, MapEntry[Error, Value]]
-  )
+  ) {
+    def updateCacheStats(f: CacheStats => CacheStats): CacheState[Key, Error, Value] =
+      copy(cacheStats = f(cacheStats))
+
+    def updateEntryStats(key: Key)(f: EntryStats => EntryStats): CacheState[Key, Error, Value] =
+      copy(map = map.updatedWith(key) {
+        case None                     => None
+        case Some(MapEntry(stats, v)) => Some(MapEntry(f(stats), v))
+      })
+  }
   private object CacheState {
     def initial[Key, E, Value](implicit ordering: Ordering[Entry[Value]]): CacheState[Key, E, Value] = {
       implicit val tupleOrdering: Ordering[(Key, Entry[Value])] =
