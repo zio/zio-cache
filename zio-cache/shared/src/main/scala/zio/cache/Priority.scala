@@ -15,7 +15,7 @@ package zio.cache
  */
 sealed abstract class Priority[-Value] { self =>
 
-  def compare(left: Entry[Value], right: Entry[Value]): CacheWorth
+  def compare(left: Entry[Value], right: Entry[Value]): Int
 
   /**
    * A symbolic alias for `andThen`.
@@ -30,7 +30,13 @@ sealed abstract class Priority[-Value] { self =>
    * on `that`.
    */
   final def andThen[Value1 <: Value](that: Priority[Value1]): Priority[Value1] =
-    Priority((left, right) => self.compare(left, right) ++ that.compare(left, right))
+    Priority { (left, right) =>
+      val compare = self.compare(left, right)
+      if (compare != 0) compare else that.compare(left, right)
+    }
+
+  final def equals(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) == 0
 
   /**
    * Returns a new `Priority` that is the inverse of this `Priority`, so the
@@ -38,16 +44,24 @@ sealed abstract class Priority[-Value] { self =>
    * in the new `Priority` and vice versa.
    */
   final def flip: Priority[Value] =
-    Priority((left, right) => compare(left, right).flip)
+    Priority((left, right) => compare(right, left))
+
+  final def greaterThan(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) > 0
+
+  final def greaterThanEqualTo(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) >= 0
+
+  final def lessThan(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) < 0
+
+  final def lessThanEqualTo(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) <= 0
 
   final def toOrdering[Value1 <: Value]: Ordering[Entry[Value1]] =
     new Ordering[Entry[Value1]] {
       def compare(l: Entry[Value1], r: Entry[Value1]): Int =
-        self.compare(l, r) match {
-          case CacheWorth.Left  => -1
-          case CacheWorth.Equal => 0
-          case CacheWorth.Right => 1
-        }
+        self.compare(l, r)
     }
 }
 
@@ -57,9 +71,9 @@ object Priority {
    * Constructs a `Priority` from a function that computes a relative ranking
    * given the current time and two entries.
    */
-  def apply[Value](compare0: (Entry[Value], Entry[Value]) => CacheWorth) =
+  def apply[Value](compare0: (Entry[Value], Entry[Value]) => Int) =
     new Priority[Value] {
-      def compare(left: Entry[Value], right: Entry[Value]): CacheWorth =
+      def compare(left: Entry[Value], right: Entry[Value]): Int =
         compare0(left, right)
     }
 
@@ -67,29 +81,19 @@ object Priority {
    * A `Priority` that considers all cache entries to have equal priority.
    */
   val any: Priority[Any] =
-    Priority((_, _) => CacheWorth.Equal)
+    Priority((_, _) => 0)
 
   /**
    * Constructs a `Priority` from a function that projects the cache or entry
    * statistics to a value for which an `Ordering` is defined.
    */
   def fromOrdering[A](proj: Entry[Any] => A)(implicit ord: Ordering[A]): Priority[Any] =
-    Priority { (left, right) =>
-      val compare = ord.compare(proj(left), proj(right))
-      if (compare < 0) CacheWorth.Left
-      else if (compare > 0) CacheWorth.Right
-      else CacheWorth.Equal
-    }
+    Priority((left, right) => ord.compare(proj(left), proj(right)))
 
   /**
    * Constructs a `Priority` from an entry value for which an `Ordering` is
    * defined.
    */
   def fromOrderingValue[A](implicit ord: Ordering[A]): Priority[A] =
-    Priority { (left, right) =>
-      val compare = ord.compare(left.value, right.value)
-      if (compare < 0) CacheWorth.Left
-      else if (compare > 0) CacheWorth.Right
-      else CacheWorth.Equal
-    }
+    Priority((left, right) => ord.compare(left.value, right.value))
 }
