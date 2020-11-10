@@ -30,9 +30,6 @@ object CacheGen {
       totalLoadTime
     )
 
-  lazy val genCacheWorth: Gen[Random, CacheWorth] =
-    Gen.elements(CacheWorth.Left, CacheWorth.Right, CacheWorth.Equal)
-
   lazy val genCachingPolicy: Gen[Random, CachingPolicy[Any]] =
     for {
       priority <- genPriority
@@ -82,5 +79,5 @@ object CacheGen {
     Gen.long(0, Long.MaxValue)
 
   lazy val genPriority: Gen[Random, Priority[Any]] =
-    Gen.function2[Random, Entry[Any], Entry[Any], CacheWorth](genCacheWorth).map(Priority(_))
+    Gen.function2[Random, Entry[Any], Entry[Any], Int](Gen.elements(-1, 0, 1)).map(Priority(_))
 }

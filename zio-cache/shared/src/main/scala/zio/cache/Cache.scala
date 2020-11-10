@@ -94,7 +94,7 @@ object Cache {
                     val lastKey   = last._1
                     val lastEntry = last._2
 
-                    if (key != lastKey && policy.priority.compare(lastEntry, entry) == CacheWorth.Right) {
+                    if (key != lastKey && policy.priority.greaterThan(entry, lastEntry)) {
                       // The new entry has more priority than the old one:
                       newEntries2 = newEntries - last
                       newMap2 = newMap - lastKey // TODO: Make a test that ensures consistency between data structures
@@ -192,7 +192,7 @@ object Cache {
   private object CacheState {
     def initial[Key, E, Value](implicit ordering: Ordering[Entry[Value]]): CacheState[Key, E, Value] = {
       implicit val tupleOrdering: Ordering[(Key, Entry[Value])] =
-        Ordering.by[(Key, Entry[Value]), Entry[Value]](_._2).reverse
+        Ordering.by[(Key, Entry[Value]), Entry[Value]](_._2)
 
       CacheState(CacheStats.initial, SortedSet.empty[(Key, Entry[Value])], Map())
     }

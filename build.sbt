@@ -66,7 +66,6 @@ lazy val zioCacheBenchmarks = project
   .dependsOn(zioCacheJVM)
   .enablePlugins(JmhPlugin)
   .settings(buildInfoSettings("zio.cache"))
-  
   .settings(
     skip in publish := true,
     unusedCompileDependenciesFilter -= libraryDependencies.value
@@ -81,11 +80,11 @@ lazy val zioCacheBenchmarks = project
       "-Yrepl-class-based"
     ),
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio"          % zioVersion,
+      "dev.zio"          %% "zio"                     % zioVersion,
       "com.github.cb372" % "scalacache-core_2.12"     % "0.28.0",
       "com.github.cb372" % "scalacache-caffeine_2.12" % "0.28.0",
-      "dev.zio" %% "zio-test"     % zioVersion % "test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
+      "dev.zio"          %% "zio-test"                % zioVersion % "test",
+      "dev.zio"          %% "zio-test-sbt"            % zioVersion % "test"
     )
   )
   .settings(testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"))
