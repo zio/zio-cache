@@ -16,7 +16,7 @@ object CacheStats {
 
   val addHit: CacheStats => CacheStats = v => v.copy(hits = v.hits + 1L)
 
-  val addMiss: CacheStats => CacheStats = v => v.copy(hits = v.hits + 1L)
+  val addMiss: CacheStats => CacheStats = v => v.copy(misses = v.misses + 1L)
 
   def addLoadTime(time: Long): CacheStats => CacheStats = v => v.copy(loads = v.loads + time)
 
