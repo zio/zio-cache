@@ -149,8 +149,10 @@ object Cache {
 
                         (
                           trackMiss.flatMap(_ =>
-                            lookupValue
-                              .flatMap(exit => recordEntry(ref, now, key, EntryStats.make(now), exit))
+                            lookupValue.flatMap { exit =>
+                              if (lookup.include(key) == Lookup.Include.Never) ZIO.done(exit)
+                              else recordEntry(ref, now, key, EntryStats.make(now), exit)
+                            }
                           ),
                           state.copy(map = addAndPrune(now, state, key, promise))
                         )
