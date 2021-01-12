@@ -80,7 +80,7 @@ object Cache {
           case Exit.Success(value) =>
             val entry = Entry(entryStats, value)
 
-            if (policy.evict.evict(now, entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
+            if (policy.evict.evict(entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
             else
               ref.update { state =>
                 val newNow        = Instant.now()
@@ -158,7 +158,7 @@ object Cache {
                             .flatMap(exit => promise.done(exit).flatMap(_ => ZIO.succeedNow(exit)))
                             .provide(env)
 
-                        val stats = entryStats.getOrElse(key, EntryStats.make(now))
+                        val stats = entryStats.getOrElse(key, EntryStats.make(now, ttl = None))
 
                         (
                           trackMiss.flatMap(_ =>

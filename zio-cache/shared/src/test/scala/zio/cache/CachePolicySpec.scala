@@ -8,18 +8,18 @@ object CachePolicySpec extends DefaultRunnableSpec {
 
   def spec = suite("CachePolicySpec")(
     testM("++ is associative") {
-      check(genCachingPolicy, genCachingPolicy, genCachingPolicy, genInstant, genEntry, genEntry) {
-        (cachingPolicy1, cachingPolicy2, cachingPolicy3, now, l, r) =>
+      check(genCachingPolicy, genCachingPolicy, genCachingPolicy, genEntry, genEntry) {
+        (cachingPolicy1, cachingPolicy2, cachingPolicy3, l, r) =>
           val left  = (cachingPolicy1 ++ cachingPolicy2) ++ cachingPolicy3
           val right = cachingPolicy1 ++ (cachingPolicy2 ++ cachingPolicy3)
-          assert(left.compare(now, l, r))(equalTo(right.compare(now, l, r)))
+          assert(left.compare(l, r))(equalTo(right.compare(l, r)))
       }
     },
     testM("ordering of composing eviction policies is irrelevant") {
-      check(genCachingPolicy, genEvict, genInstant, genEntry, genEntry) { (cachingPolicy, evict, now, l, r) =>
+      check(genCachingPolicy, genEvict, genEntry, genEntry) { (cachingPolicy, evict, l, r) =>
         val left  = cachingPolicy ++ CachingPolicy.fromEvict(evict)
         val right = CachingPolicy.fromEvict(evict) ++ cachingPolicy
-        assert(left.compare(now, l, r))(equalTo(right.compare(now, l, r)))
+        assert(left.compare(l, r))(equalTo(right.compare(l, r)))
       }
     }
   )

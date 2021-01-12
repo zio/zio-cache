@@ -1,7 +1,5 @@
 package zio.cache
 
-import java.time.Instant
-
 /**
  * A `CachingPolicy` is used to decide which values to expire from the cache
  * when the cache reaches its maximum size and there is a new potential cache
@@ -15,28 +13,28 @@ final case class CachingPolicy[-Value](priority: Priority[Value], evict: Evict[V
   def andThen[Value1 <: Value](that: CachingPolicy[Value1]): CachingPolicy[Value1] =
     CachingPolicy(self.priority ++ that.priority, self.evict || that.evict)
 
-  def compare(now: Instant, left: Entry[Value], right: Entry[Value]): Int =
-    if (evict.evict(now, left) && !evict.evict(now, right)) -1
-    else if (!evict.evict(now, left) && evict.evict(now, right)) 1
+  def compare(left: Entry[Value], right: Entry[Value]): Int =
+    if (evict.evict(left) && !evict.evict(right)) -1
+    else if (!evict.evict(left) && evict.evict(right)) 1
     else priority.compare(left, right)
 
-  def equals(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) == 0
+  def equals(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) == 0
 
   def flip: CachingPolicy[Value] =
     CachingPolicy(priority.flip, !evict)
 
-  def greaterThan(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) > 0
+  def greaterThan(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) > 0
 
-  def greaterThanEqualTo(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) >= 0
+  def greaterThanEqualTo(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) >= 0
 
-  def lessThan(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) < 0
+  def lessThan(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) < 0
 
-  def lessThanEqualTo(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) <= 0
+  def lessThanEqualTo(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) <= 0
 }
 
 object CachingPolicy {
@@ -56,7 +54,7 @@ object CachingPolicy {
   def fromOrderingValue[A](implicit ord: Ordering[A]): CachingPolicy[A] =
     fromPriority(Priority.fromOrderingValue)
 
-  def fromPredicate[A](evict: (Instant, Entry[A]) => Boolean): CachingPolicy[A] =
+  def fromPredicate[A](evict: Entry[A] => Boolean): CachingPolicy[A] =
     fromEvict(Evict(evict))
 
   def fromEvict[A](evict: Evict[A]): CachingPolicy[A] =

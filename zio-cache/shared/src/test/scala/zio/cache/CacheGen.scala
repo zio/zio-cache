@@ -47,18 +47,20 @@ object CacheGen {
 
   lazy val genEntryStats: Gen[Random, EntryStats] =
     for {
-      added      <- genInstant
-      accessed   <- genInstant
-      loaded     <- genInstant
-      hits       <- genPositiveLong
-      loads      <- genPositiveLong
-      curSize    <- genPositiveLong
-      accSize    <- genPositiveLong
-      accLoading <- genDuration
+      added          <- genInstant
+      accessed       <- genInstant
+      loaded         <- genInstant
+      expirationTime <- genInstant
+      hits           <- genPositiveLong
+      loads          <- genPositiveLong
+      curSize        <- genPositiveLong
+      accSize        <- genPositiveLong
+      accLoading     <- genDuration
     } yield EntryStats(
       added,
       accessed,
       loaded,
+      Option(expirationTime),
       hits,
       loads,
       curSize,
@@ -67,7 +69,7 @@ object CacheGen {
     )
 
   lazy val genEvict: Gen[Random, Evict[Any]] =
-    Gen.function2[Random, Instant, Entry[Any], Boolean](genBoolean).map(Evict(_))
+    Gen.function[Random, Entry[Any], Boolean](genBoolean).map(Evict(_))
 
   lazy val genInstant: Gen[Random, Instant] =
     Gen.anyInstant

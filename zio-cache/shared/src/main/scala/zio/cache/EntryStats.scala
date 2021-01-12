@@ -22,6 +22,7 @@ final case class EntryStats(
   added: Instant,
   accessed: Instant,
   loaded: Instant,
+  expirationTime: Option[Instant],
   hits: Long,
   loads: Long,
   curSize: Long,
@@ -47,8 +48,9 @@ final case class EntryStats(
 
 object EntryStats {
 
-  def make(now: Instant): EntryStats =
-    EntryStats(now, now, now, 1L, 0L, 0L, 0L, Duration.ZERO)
+  def make(now: Instant,
+           ttl: Option[Duration]): EntryStats =
+    EntryStats(now, now, now, ttl.map(ttl => now.plusMillis(ttl.toMillis)), 1L, 0L, 0L, 0L, Duration.ZERO)
 
   def addHit(time: Instant): EntryStats => EntryStats =
     _.addHit(time)
