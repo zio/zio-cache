@@ -53,9 +53,10 @@ object Cache {
    * Creates a cache with a specified capacity and lookup function.
    */
   def make[Key, R, E, Value](
-    capacity: Int,
-    policy: CachingPolicy[Value],
-    lookup: Lookup[Key, R, E, Value]
+                              capacity: Int,
+                              policy: CachingPolicy[Value],
+                              evict: Evict[Value],
+                              lookup: Lookup[Key, R, E, Value]
   ): ZIO[R, Nothing, Cache[Key, E, Value]] =
     ZIO.environment[R].flatMap { env =>
       type StateType = CacheState[Key, E, Value]
@@ -80,7 +81,7 @@ object Cache {
           case Exit.Success(value) =>
             val entry = Entry(entryStats, value)
 
-            if (policy.evict.evict(now, entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
+            if (evict.evict(now, entry)) ref.update(state => state.copy(map = state.map - key)).as(value)
             else
               ref.update { state =>
                 val newNow        = Instant.now()
@@ -104,7 +105,7 @@ object Cache {
                   val lastKey   = last._1
                   val lastEntry = Entry(state.entryStats(lastKey), last._2)
 
-                  if (key != lastKey && policy.priority.greaterThan(entry, lastEntry)) {
+                  if (key != lastKey && policy.greaterThan(entry, lastEntry)) {
                     // The new entry has more priority than the old one:
                     newCacheStats2 = newCacheStats.addEviction
                     newEntries2 = newEntries - last
@@ -124,7 +125,7 @@ object Cache {
               }.flatMap(_ => ZIO.succeedNow(value))
         }
 
-      ZIO.fiberId.zip(Ref.make[StateType](CacheState.initial(policy.priority.toOrdering))).map {
+      ZIO.fiberId.zip(Ref.make[StateType](CacheState.initial(policy.toOrdering))).map {
         case (fiberId, ref) =>
           new Cache[Key, E, Value] {
             val identityFn: IO[E, Value] => IO[E, Value] = v => v

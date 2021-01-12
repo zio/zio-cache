@@ -11,34 +11,34 @@ object CacheSpec extends DefaultRunnableSpec {
   def spec = suite("CacheSpec")(
     testM("get invokes lookup function") {
       for {
-        cache <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(20, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         value <- cache.get("Sherlock")
       } yield assert(value)(equalTo("Sherlock"))
     },
     testM("get increases cache size") {
       for {
-        cache <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(20, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _     <- cache.get("Sherlock")
         size  <- cache.size
       } yield assert(size)(equalTo(1))
     },
     testM("cache stores no more entries than capacity") {
       for {
-        cache <- Cache.make(1, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(1, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _     <- cache.get("Sherlock") *> cache.get("Holmes")
         size  <- cache.size
       } yield assert(size)(equalTo(1))
     },
     testM("cache will not store values that should be evicted") {
       for {
-        cache <- Cache.make(20, CachingPolicy(Priority.any, Evict.equalTo("Sherlock")), identityLookup)
+        cache <- Cache.make(20, CachingPolicy.any, Evict.equalTo("Sherlock"), identityLookup)
         _     <- cache.get("Sherlock") *> cache.get("Holmes")
         size  <- cache.size
       } yield assert(size)(equalTo(1))
     },
     testM("cache will respecting priority when evicting on a full cache") {
       for {
-        cache <- Cache.make(1, CachingPolicy(Priority.fromOrderingValue[String], Evict.none), identityLookup)
+        cache <- Cache.make(1, CachingPolicy.fromOrderingValue[String], Evict.none, identityLookup)
         _     <- cache.get("Apple") *> cache.get("Banana")
         rez1  <- cache.contains("Banana")
         rez2  <- cache.contains("Apple")

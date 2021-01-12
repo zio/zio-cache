@@ -1,45 +1,101 @@
 package zio.cache
 
-import java.time.Instant
-
 /**
- * A `CachingPolicy` is used to decide which values to expire from the cache
- * when the cache reaches its maximum size and there is a new potential cache
- * entry computed.
+ * A `Priority` is used to determine which values that may potentially be
+ * retained in the cache should be retained if there is not sufficient space
+ * in the cache for all values that could potentially be retained. Unlike
+ * `Evict`, which describes a binary distinction between values that must be
+ * evicted from the cache and values that may potentially be retained,
+ * `Priority` describes a relative ordering of values that may potentially be
+ * retained.
+ *
+ * You can think of `Priority` as like an `Ordering` except that the relative
+ * priority of two entries in the cache may depend on the current time as well
+ * as the two entries.
  */
-final case class CachingPolicy[-Value](priority: Priority[Value], evict: Evict[Value]) { self =>
+sealed abstract class CachingPolicy[-Value] { self =>
 
-  def ++[Value1 <: Value](that: CachingPolicy[Value1]): CachingPolicy[Value1] =
+  def compare(left: Entry[Value], right: Entry[Value]): Int
+
+  /**
+   * A symbolic alias for `andThen`.
+   */
+  final def ++[Value1 <: Value](that: CachingPolicy[Value1]): CachingPolicy[Value1] =
     self andThen that
 
-  def andThen[Value1 <: Value](that: CachingPolicy[Value1]): CachingPolicy[Value1] =
-    CachingPolicy(self.priority ++ that.priority, self.evict || that.evict)
+  /**
+   * Composes this `Priority` with the specified `Priority` to return a new
+   * `Priority` that first prioritizes values based on `self`, and if two
+   * values have equal priority based on `self` then prioritizing them based
+   * on `that`.
+   */
+  final def andThen[Value1 <: Value](that: CachingPolicy[Value1]): CachingPolicy[Value1] =
+    CachingPolicy { (left, right) =>
+      val compare = self.compare(left, right)
+      if (compare != 0) compare else that.compare(left, right)
+    }
 
-  def compare(now: Instant, left: Entry[Value], right: Entry[Value]): Int =
-    if (evict.evict(now, left) && !evict.evict(now, right)) -1
-    else if (!evict.evict(now, left) && evict.evict(now, right)) 1
-    else priority.compare(left, right)
+  final def equals(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) == 0
 
-  def equals(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) == 0
+  /**
+   * Returns a new `Priority` that is the inverse of this `Priority`, so the
+   * highest priority value in this `Priority` would have the lowest priority
+   * in the new `Priority` and vice versa.
+   */
+  final def flip: CachingPolicy[Value] =
+    CachingPolicy((left, right) => compare(right, left))
 
-  def flip: CachingPolicy[Value] =
-    CachingPolicy(priority.flip, !evict)
+  final def greaterThan(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) > 0
 
-  def greaterThan(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) > 0
+  final def greaterThanEqualTo(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) >= 0
 
-  def greaterThanEqualTo(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) >= 0
+  final def lessThan(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) < 0
 
-  def lessThan(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) < 0
+  final def lessThanEqualTo(left: Entry[Value], right: Entry[Value]): Boolean =
+    compare(left, right) <= 0
 
-  def lessThanEqualTo(now: Instant, left: Entry[Value], right: Entry[Value]): Boolean =
-    compare(now, left, right) <= 0
+  final def toOrdering[Value1 <: Value]: Ordering[Entry[Value1]] =
+    new Ordering[Entry[Value1]] {
+      def compare(l: Entry[Value1], r: Entry[Value1]): Int =
+        self.compare(l, r)
+    }
 }
 
 object CachingPolicy {
+
+  /**
+   * Constructs a `Priority` from a function that computes a relative ranking
+   * given the current time and two entries.
+   */
+  def apply[Value](compare0: (Entry[Value], Entry[Value]) => Int): CachingPolicy[Value] =
+    new CachingPolicy[Value] {
+      def compare(left: Entry[Value], right: Entry[Value]): Int =
+        compare0(left, right)
+    }
+
+  /**
+   * A `Priority` that considers all cache entries to have equal priority.
+   */
+  val any: CachingPolicy[Any] =
+    CachingPolicy((_, _) => 0)
+
+  /**
+   * Constructs a `Priority` from a function that projects the cache or entry
+   * statistics to a value for which an `Ordering` is defined.
+   */
+  def fromOrdering[A](proj: Entry[Any] => A)(implicit ord: Ordering[A]): CachingPolicy[Any] =
+    CachingPolicy((left, right) => ord.compare(proj(left), proj(right)))
+
+  /**
+   * Constructs a `Priority` from an entry value for which an `Ordering` is
+   * defined.
+   */
+  def fromOrderingValue[A](implicit ord: Ordering[A]): CachingPolicy[A] =
+    CachingPolicy((left, right) => ord.compare(left.value, right.value))
 
   val byHits: CachingPolicy[Any] =
     fromOrdering(_.entryStats.hits)
@@ -50,18 +106,4 @@ object CachingPolicy {
   val bySize: CachingPolicy[Any] =
     fromOrdering(_.entryStats.curSize)
 
-  def fromOrdering[A](proj: Entry[Any] => A)(implicit ord: Ordering[A]): CachingPolicy[Any] =
-    fromPriority(Priority.fromOrdering(proj))
-
-  def fromOrderingValue[A](implicit ord: Ordering[A]): CachingPolicy[A] =
-    fromPriority(Priority.fromOrderingValue)
-
-  def fromPredicate[A](evict: (Instant, Entry[A]) => Boolean): CachingPolicy[A] =
-    fromEvict(Evict(evict))
-
-  def fromEvict[A](evict: Evict[A]): CachingPolicy[A] =
-    CachingPolicy(Priority.any, evict)
-
-  def fromPriority[A](priority: Priority[A]): CachingPolicy[A] =
-    CachingPolicy(priority, Evict.none)
 }

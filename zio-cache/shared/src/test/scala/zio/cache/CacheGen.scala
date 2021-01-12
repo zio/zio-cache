@@ -30,11 +30,11 @@ object CacheGen {
       totalLoadTime
     )
 
-  lazy val genCachingPolicy: Gen[Random, CachingPolicy[Any]] =
+  lazy val genCachingPolicyAndEvict: Gen[Random, (CachingPolicy[Any], Evict[Any])] =
     for {
-      priority <- genPriority
+      cachingPolicy <- getCachingPolicy
       evict    <- genEvict
-    } yield CachingPolicy(priority, evict)
+    } yield (cachingPolicy, evict)
 
   lazy val genDuration: Gen[Random, Duration] =
     genPositiveLong.map(Duration.of(_, ChronoUnit.NANOS))
@@ -78,6 +78,6 @@ object CacheGen {
   lazy val genPositiveLong: Gen[Random, Long] =
     Gen.long(0, Long.MaxValue)
 
-  lazy val genPriority: Gen[Random, Priority[Any]] =
-    Gen.function2[Random, Entry[Any], Entry[Any], Int](Gen.elements(-1, 0, 1)).map(Priority(_))
+  lazy val getCachingPolicy: Gen[Random, CachingPolicy[Any]] =
+    Gen.function2[Random, Entry[Any], Entry[Any], Int](Gen.elements(-1, 0, 1)).map(CachingPolicy(_))
 }

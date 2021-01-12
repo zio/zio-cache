@@ -11,7 +11,7 @@ object CacheStatsSpec extends DefaultRunnableSpec {
   def spec = suite("CacheStatsSpec")(
     testM("evictions") {
       for {
-        cache     <- Cache.make(1, CachingPolicy.byLastAccess, identityLookup)
+        cache     <- Cache.make(1, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _         <- cache.get("Sherlock")
         _         <- cache.get("Holmes")
         evictions <- cache.evictions
@@ -19,7 +19,7 @@ object CacheStatsSpec extends DefaultRunnableSpec {
     },
     testM("hits") {
       for {
-        cache <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(20, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _     <- cache.get("Sherlock")
         _     <- cache.get("Sherlock")
         hits  <- cache.hits
@@ -27,7 +27,7 @@ object CacheStatsSpec extends DefaultRunnableSpec {
     },
     testM("cache loads") {
       for {
-        cache <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(20, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _     <- cache.get("Sherlock")
         _     <- cache.get("Sherlock")
         loads <- cache.loads
@@ -35,7 +35,7 @@ object CacheStatsSpec extends DefaultRunnableSpec {
     },
     testM("entry loads") {
       for {
-        cache <- Cache.make(1, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(1, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _     <- cache.get("Sherlock")
         _     <- cache.get("Holmes")
         _     <- cache.get("Sherlock")
@@ -44,14 +44,14 @@ object CacheStatsSpec extends DefaultRunnableSpec {
     },
     testM("misses") {
       for {
-        cache  <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
+        cache  <- Cache.make(20, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _      <- cache.get("Sherlock")
         misses <- cache.misses
       } yield assert(misses)(equalTo(1L))
     },
     testM("totalLoadTime") {
       for {
-        cache         <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
+        cache         <- Cache.make(20, CachingPolicy.byLastAccess, Evict.none, identityLookup)
         _             <- cache.get("Sherlock")
         totalLoadTime <- cache.totalLoadTime
       } yield assert(totalLoadTime.toNanos)(isGreaterThan(0L))

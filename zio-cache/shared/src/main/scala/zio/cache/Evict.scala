@@ -34,5 +34,8 @@ object Evict {
       life.compareTo(duration) >= 0
     }
 
+  def fromPredicate[A](evict: (Instant, Entry[A]) => Boolean): Evict[A] =
+    Evict(evict)
+
   val none: Evict[Any] = !all
 }
