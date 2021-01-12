@@ -44,13 +44,15 @@ final case class EntryStats(
 
   def updateLoadedTime(time: Instant): EntryStats =
     self.copy(loaded = time)
+
+  def updateExpirationTime(time: Option[Instant]): EntryStats =
+    self.copy(expirationTime = time)
 }
 
 object EntryStats {
 
-  def make(now: Instant,
-           ttl: Option[Duration]): EntryStats =
-    EntryStats(now, now, now, ttl.map(ttl => now.plusMillis(ttl.toMillis)), 1L, 0L, 0L, 0L, Duration.ZERO)
+  def make(now: Instant): EntryStats =
+    EntryStats(now, now, now, None, 1L, 0L, 0L, 0L, Duration.ZERO)
 
   def addHit(time: Instant): EntryStats => EntryStats =
     _.addHit(time)
@@ -63,4 +65,7 @@ object EntryStats {
 
   def updateLoadedTime(time: Instant): EntryStats => EntryStats =
     _.updateLoadedTime(time)
+
+  def updateExpirationTime(time: Option[Instant]): EntryStats => EntryStats =
+    _.updateExpirationTime(time)
 }

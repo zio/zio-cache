@@ -47,7 +47,7 @@ class ChurnBenchmark extends BootstrapRuntime {
 
     cache = unsafeRun(
       for {
-        cache <- Cache.make(size, CachingPolicy.byLastAccess.flip, identityLookup)
+        cache <- Cache.make(size, CachingPolicy.byLastAccess.flip, Ttl.never, identityLookup)
         _     <- ZIO.foreach_(strings)(cache.get(_))
       } yield cache
     )

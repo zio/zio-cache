@@ -55,6 +55,7 @@ object Cache {
   def make[Key, R, E, Value](
     capacity: Int,
     policy: CachingPolicy[Value],
+    ttl: Ttl[Key, Value],
     lookup: Lookup[Key, R, E, Value]
   ): ZIO[R, Nothing, Cache[Key, E, Value]] =
     ZIO.environment[R].flatMap { env =>
@@ -88,7 +89,7 @@ object Cache {
                 val newCacheStats = state.cacheStats.addLoad.addLoadTime(loadTime)
                 val newEntryStats = state.entryStats.updatedWith(key) {
                   case None        => None
-                  case Some(stats) => Some(stats.addLoad(loadTime))
+                  case Some(stats) => Some(stats.addLoad(loadTime).updateExpirationTime(ttl.ttl(key, value).map(t => now.plusMillis(t.toMillis))))
                 }
                 val newEntries = state.entries + ((key, value))
                 val newMap     = state.map.updated(key, MapValue.Complete(exit))
@@ -158,7 +159,7 @@ object Cache {
                             .flatMap(exit => promise.done(exit).flatMap(_ => ZIO.succeedNow(exit)))
                             .provide(env)
 
-                        val stats = entryStats.getOrElse(key, EntryStats.make(now, ttl = None))
+                        val stats = entryStats.getOrElse(key, EntryStats.make(now))
 
                         (
                           trackMiss.flatMap(_ =>

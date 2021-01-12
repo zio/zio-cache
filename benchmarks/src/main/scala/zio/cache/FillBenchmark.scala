@@ -41,7 +41,7 @@ class FillBenchmark extends BootstrapRuntime {
   def zioCacheFill() =
     unsafeRun(
       for {
-        cache <- Cache.make(size, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(size, CachingPolicy.byLastAccess, Ttl.never, identityLookup)
         _     <- ZIO.foreach_(strings)(cache.get(_))
         size0 <- cache.size
         _     <- ZIO.effect(Predef.assert(size0 == size))
