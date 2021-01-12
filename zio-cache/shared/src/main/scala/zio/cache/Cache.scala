@@ -89,7 +89,7 @@ object Cache {
                 val newCacheStats = state.cacheStats.addLoad.addLoadTime(loadTime)
                 val newEntryStats = state.entryStats.updatedWith(key) {
                   case None        => None
-                  case Some(stats) => Some(stats.addLoad(loadTime).updateExpirationTime(ttl.ttl(key, value).map(t => now.plusMillis(t.toMillis))))
+                  case Some(stats) => Some(stats.addLoad(loadTime).updateExpirationTime(ttl.ttl(key, entry).map(t => now.plusMillis(t.toMillis))))
                 }
                 val newEntries = state.entries + ((key, value))
                 val newMap     = state.map.updated(key, MapValue.Complete(exit))
