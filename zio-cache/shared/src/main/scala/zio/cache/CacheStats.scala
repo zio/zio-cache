@@ -10,18 +10,41 @@ final case class CacheStats(
   loads: Long,
   evictions: Long,
   totalLoadTime: Duration
-)
+) { self =>
+
+  def addEviction: CacheStats =
+    self.copy(evictions = self.evictions + 1L)
+
+  def addLoad: CacheStats =
+    self.copy(loads = loads + 1L)
+
+  def addLoadTime(loadTime: Duration): CacheStats =
+    self.copy(totalLoadTime = totalLoadTime.plus(loadTime))
+
+  def addMiss: CacheStats =
+    self.copy(misses = misses + 1L)
+
+  def addHit: CacheStats =
+    self.copy(hits = hits + 1L)
+}
+
 object CacheStats {
-  val initial = CacheStats(0, 0L, 0L, 0L, 0L, 0L, Duration.ZERO)
 
-  val addHit: CacheStats => CacheStats = v => v.copy(hits = v.hits + 1L)
+  val initial: CacheStats =
+    CacheStats(0, 0L, 0L, 0L, 0L, 0L, Duration.ZERO)
 
-  val addMiss: CacheStats => CacheStats = v => v.copy(misses = v.misses + 1L)
+  val addHit: CacheStats => CacheStats =
+    _.addHit
 
-  def addLoadTime(time: Long): CacheStats => CacheStats = v => v.copy(loads = v.loads + time)
+  val addMiss: CacheStats => CacheStats =
+    _.addMiss
 
-  def addEviction: CacheStats => CacheStats = v => v.copy(evictions = v.evictions + 1L)
+  val addLoad: CacheStats => CacheStats =
+    _.addLoad
+
+  val addEviction: CacheStats => CacheStats =
+    _.addEviction
 
   def addTotalLoadTime(time: Duration): CacheStats => CacheStats =
-    v => v.copy(totalLoadTime = v.totalLoadTime.plus(time))
+    _.addLoadTime(time)
 }

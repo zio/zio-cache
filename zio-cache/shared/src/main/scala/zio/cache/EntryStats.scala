@@ -27,16 +27,38 @@ final case class EntryStats(
   curSize: Long,
   accSize: Long,
   accLoading: Duration
-) {
-  def size: Long = accSize / loads
+) { self =>
+
+  def addHit(time: Instant): EntryStats =
+    self.copy(accessed = time, hits = hits + 1L)
+
+  def addLoad(time: Duration): EntryStats =
+    self.copy(loads = loads + 1L, accLoading = accLoading.plus(time))
+
+  def size: Long =
+    accSize / loads
+
+  def updateAccessedTime(time: Instant): EntryStats =
+    self.copy(accessed = time)
+
+  def updateLoadedTime(time: Instant): EntryStats =
+    self.copy(loaded = time)
 }
+
 object EntryStats {
+
   def make(now: Instant): EntryStats =
-    EntryStats(now, now, now, 1L, 1L, 0L, 0L, Duration.ZERO)
+    EntryStats(now, now, now, 1L, 0L, 0L, 0L, Duration.ZERO)
 
-  val addHit: EntryStats => EntryStats = v => v.copy(hits = v.hits + 1L)
+  def addHit(time: Instant): EntryStats => EntryStats =
+    _.addHit(time)
 
-  val addLoad: EntryStats => EntryStats = v => v.copy(loads = v.loads + 1L)
+  def updateAccessedTime(time: Instant): EntryStats => EntryStats =
+    _.updateAccessedTime(time)
 
-  def updateLoadedTime(time: Instant): EntryStats => EntryStats = v => v.copy(loaded = time)
+  def addLoad(time: Duration): EntryStats => EntryStats =
+    _.addLoad(time)
+
+  def updateLoadedTime(time: Instant): EntryStats => EntryStats =
+    _.updateLoadedTime(time)
 }
