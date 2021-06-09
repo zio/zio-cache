@@ -1,49 +1,65 @@
 package zio.cache
 
 import zio._
+import zio.duration._
 import zio.test._
 import zio.test.Assertion._
 
 object CacheSpec extends DefaultRunnableSpec {
-  val identityLookup =
-    Lookup[String, Any, Nothing, String]((key: String) => ZIO.succeed(key))
+
+  def hash(x: Int): Int => UIO[Int] =
+    y => ZIO.succeed((x ^ y).hashCode)
 
   def spec = suite("CacheSpec")(
-    testM("get invokes lookup function") {
-      for {
-        cache <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
-        value <- cache.get("Sherlock")
-      } yield assert(value)(equalTo("Sherlock"))
+    suite("lookup")(
+      testM("sequential") {
+        checkM(Gen.anyInt) { salt =>
+          for {
+            cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
+            actual   <- ZIO.foreach(1 to 100)(cache.get)
+            expected <- ZIO.foreach(1 to 100)(hash(salt))
+          } yield assert(actual)(equalTo(expected))
+        }
+      },
+      testM("concurrent") {
+        checkM(Gen.anyInt) { salt =>
+          for {
+            cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
+            actual   <- ZIO.foreachPar(1 to 100)(cache.get)
+            expected <- ZIO.foreachPar(1 to 100)(hash(salt))
+          } yield assert(actual)(equalTo(expected))
+        }
+      },
+      testM("capacity") {
+        checkM(Gen.anyInt) { salt =>
+          for {
+            cache    <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
+            actual   <- ZIO.foreachPar(1 to 100)(cache.get)
+            expected <- ZIO.foreachPar(1 to 100)(hash(salt))
+          } yield assert(actual)(equalTo(expected))
+        }
+      }
+    ),
+    testM("size") {
+      checkM(Gen.anyInt) { salt =>
+        for {
+          cache <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
+          _     <- ZIO.foreach((1 to 100))(cache.get)
+          size  <- cache.size
+        } yield assert(size)(equalTo(10))
+      }
     },
-    testM("get increases cache size") {
-      for {
-        cache <- Cache.make(20, CachingPolicy.byLastAccess, identityLookup)
-        _     <- cache.get("Sherlock")
-        size  <- cache.size
-      } yield assert(size)(equalTo(1))
-    },
-    testM("cache stores no more entries than capacity") {
-      for {
-        cache <- Cache.make(1, CachingPolicy.byLastAccess, identityLookup)
-        _     <- cache.get("Sherlock") *> cache.get("Holmes")
-        size  <- cache.size
-      } yield assert(size)(equalTo(1))
-    },
-    testM("cache will not store values that should be evicted") {
-      for {
-        cache <- Cache.make(20, CachingPolicy(Priority.any, Evict.equalTo("Sherlock")), identityLookup)
-        _     <- cache.get("Sherlock") *> cache.get("Holmes")
-        size  <- cache.size
-      } yield assert(size)(equalTo(1))
-    },
-    testM("cache will respecting priority when evicting on a full cache") {
-      for {
-        cache <- Cache.make(1, CachingPolicy(Priority.fromOrderingValue[String], Evict.none), identityLookup)
-        _     <- cache.get("Apple") *> cache.get("Banana")
-        rez1  <- cache.contains("Banana")
-        rez2  <- cache.contains("Apple")
-        size  <- cache.size
-      } yield assert(rez1)(isTrue) && assert(rez2)(isFalse) && assert(size)(equalTo(1))
+    testM("cacheStats") {
+      checkM(Gen.anyInt) { salt =>
+        for {
+          cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
+          _          <- ZIO.foreachPar((1 to 100).map(_ / 2))(cache.get)
+          cacheStats <- cache.cacheStats
+          hits       = cacheStats.hits
+          misses     = cacheStats.misses
+        } yield assert(hits)(equalTo(49L)) &&
+          assert(misses)(equalTo(51L))
+      }
     }
   )
 }

@@ -8,21 +8,17 @@ import org.openjdk.jmh.annotations._
 import org.openjdk.jmh.infra.Blackhole
 
 import zio.{ BootstrapRuntime, ZIO }
+import zio.duration._
 import zio.internal.Platform
 import scalacache._
 import scalacache.caffeine._
 
-/**
- * 8/26/2020:            FillBenchmark.zioCacheFill   10000  thrpt    3  65.278 ∩┐╜ 1.741  ops/s
- * (EntryStats):         FillBenchmark.zioCacheFill   10000  thrpt    3  58.841 ∩┐╜ 8.347  ops/s
- * (eviction):           FillBenchmark.zioCacheFill   10000  thrpt    3  40.000 ∩┐╜ 8.347  ops/s
- * (Promise.await):      FillBenchmark.zioCacheFill   10000  thrpt    3  82.770 ∩┐╜ 4.233  ops/s
- * (Pending | Complete): FillBenchmark.zioCacheFill   10000  thrpt    3  67.379 ∩┐╜ 1.381  ops/s
- *
- */
 @State(Scope.Thread)
 @BenchmarkMode(Array(Mode.Throughput))
 @OutputTimeUnit(TimeUnit.SECONDS)
+@Measurement(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
+@Warmup(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
+@Fork(1)
 class FillBenchmark extends BootstrapRuntime {
   override val platform: Platform = Platform.benchmark
 
@@ -41,7 +37,7 @@ class FillBenchmark extends BootstrapRuntime {
   def zioCacheFill() =
     unsafeRun(
       for {
-        cache <- Cache.make(size, CachingPolicy.byLastAccess, identityLookup)
+        cache <- Cache.make(size, Duration.Infinity, identityLookup)
         _     <- ZIO.foreach_(strings)(cache.get(_))
         size0 <- cache.size
         _     <- ZIO.effect(Predef.assert(size0 == size))

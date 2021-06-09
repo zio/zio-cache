@@ -1,6 +1,7 @@
 package zio.cache
 
 import java.util.concurrent.TimeUnit
+import zio.duration._
 
 import scala.collection.immutable.Range
 
@@ -12,23 +13,12 @@ import zio.internal.Platform
 import scalacache.{ Cache => SCache, _ }
 import scalacache.caffeine._
 
-/**
- * (Baseline)            ChurnBenchmark.zioCacheChurn   10000  thrpt    3  113.703 ∩┐╜ 2.392  ops/s
- * (Pending | Complete): ChurnBenchmark.zioCacheChurn   10000  thrpt    3  105.944 ∩┐╜ 5.873  ops/s
- *
- * [info] ChurnBenchmark.zioCacheChurn   10000  thrpt    3  0.018 ∩┐╜ 0.001  ops/s
- * [info] ChurnBenchmark.zioCacheChurn   10000  thrpt    3  0.059 ∩┐╜ 0.015  ops/s
- *
- * [info] ChurnBenchmark.zioCacheChurn   10000  thrpt    3  49.796 ∩┐╜ 7.342  ops/s
- *
- * [info] ChurnBenchmark.zioCacheChurn   10000  thrpt    3  51.576 ∩┐╜ 25.941  ops/s
- *
- * [info] ChurnBenchmark.zioCacheChurn   10000  thrpt   25  117.802 ± 3.116  ops/s
- * [info] FillBenchmark.zioCacheFill     10000  thrpt   25   56.941 ± 1.149  ops/s
- */
 @State(Scope.Thread)
 @BenchmarkMode(Array(Mode.Throughput))
 @OutputTimeUnit(TimeUnit.SECONDS)
+@Measurement(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
+@Warmup(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
+@Fork(1)
 class ChurnBenchmark extends BootstrapRuntime {
   override val platform: Platform = Platform.benchmark
 
@@ -47,7 +37,7 @@ class ChurnBenchmark extends BootstrapRuntime {
 
     cache = unsafeRun(
       for {
-        cache <- Cache.make(size, CachingPolicy.byLastAccess.flip, identityLookup)
+        cache <- Cache.make(size, Duration.Infinity, identityLookup)
         _     <- ZIO.foreach_(strings)(cache.get(_))
       } yield cache
     )
