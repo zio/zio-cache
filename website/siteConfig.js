@@ -21,7 +21,7 @@ const users = [
 ];
 
 const siteConfig = {
-  title: 'ZIO Cache',
+  title: 'zio-cache',
   tagline: 'TODO: Tagline',
   url: 'https://zio.github.io',
   baseUrl: '/zio-cache/',

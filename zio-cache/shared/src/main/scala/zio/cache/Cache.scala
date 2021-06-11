@@ -1,11 +1,11 @@
 package zio.cache
 
-import zio.{ Exit, IO, Promise, UIO, URIO, ZIO }
 import zio.internal.MutableConcurrentQueue
+import zio.{Exit, IO, Promise, UIO, URIO, ZIO}
 
-import java.time.{ Duration, Instant }
+import java.time.{Duration, Instant}
 import java.util.Map
-import java.util.concurrent.atomic.{ AtomicBoolean, LongAdder }
+import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
 
 trait Cache[-Key, +Error, +Value] {
 
@@ -100,7 +100,7 @@ object Cache {
                   .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(k)))
               } else {
                 value match {
-                  case MapValue.Pending(key, promise) =>
+                  case MapValue.Pending(key, promise)           =>
                     trackAccess(key)
                     trackHit()
                     promise.await
@@ -175,8 +175,6 @@ object Cache {
         new AtomicBoolean(false)
       )
   }
-
-  private final case class EntryState(@volatile var loaded: Instant)
 
   /**
    * A `KeySet` is a sorted set of keys in the cache ordered by last access.

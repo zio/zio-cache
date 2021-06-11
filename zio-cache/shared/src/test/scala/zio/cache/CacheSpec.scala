@@ -1,16 +1,26 @@
 package zio.cache
 
 import zio._
+import zio.blocking.Blocking
+import zio.clock.Clock
 import zio.duration._
-import zio.test._
+import zio.random.Random
 import zio.test.Assertion._
+import zio.test._
+import zio.test.environment.{Live, TestClock, TestConsole, TestRandom, TestSystem}
 
 object CacheSpec extends DefaultRunnableSpec {
 
   def hash(x: Int): Int => UIO[Int] =
     y => ZIO.succeed((x ^ y).hashCode)
 
-  def spec = suite("CacheSpec")(
+  def spec: Spec[Has[Annotations.Service] with Has[Live.Service] with Has[Sized.Service] with Has[
+    TestClock.Service
+  ] with Has[TestConfig.Service] with Has[TestConsole.Service] with Has[TestRandom.Service] with Has[
+    TestSystem.Service
+  ] with Has[Clock.Service] with Has[zio.console.Console.Service] with Has[zio.system.System.Service] with Has[
+    Random.Service
+  ] with Has[Blocking.Service], TestFailure[Any], TestSuccess] = suite("CacheSpec")(
     suite("lookup")(
       testM("sequential") {
         checkM(Gen.anyInt) { salt =>
@@ -55,8 +65,8 @@ object CacheSpec extends DefaultRunnableSpec {
           cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
           _          <- ZIO.foreachPar((1 to 100).map(_ / 2))(cache.get)
           cacheStats <- cache.cacheStats
-          hits       = cacheStats.hits
-          misses     = cacheStats.misses
+          hits        = cacheStats.hits
+          misses      = cacheStats.misses
         } yield assert(hits)(equalTo(49L)) &&
           assert(misses)(equalTo(51L))
       }
