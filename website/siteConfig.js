@@ -21,8 +21,8 @@ const users = [
 ];
 
 const siteConfig = {
-  title: 'zio-cache',
-  tagline: 'TODO: Tagline',
+  title: 'ZIO Cache',
+  tagline: 'Easily Cache Values To Optimize The Performance Of Your Application',
   url: 'https://zio.github.io',
   baseUrl: '/zio-cache/',
 

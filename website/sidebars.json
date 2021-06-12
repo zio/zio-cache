@@ -1,7 +1,11 @@
 {
   "overview-sidebar": {
     "Overview": [
-      "overview/overview_index"
+      "overview/overview_index",
+      "overview/overview_lookup",
+      "overview/overview_cache",
+      "overview/overview_cache_statistics",
+      "overview/overview_entry_statistics"
     ]
   },
   "usecases-sidebar": {

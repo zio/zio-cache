@@ -1,11 +1,19 @@
-# zio-cache
+# ZIO Cache
 
 | Project Stage | CI | Release | Snapshot | Discord |
 | --- | --- | --- | --- | --- |
 | [![Project stage][Badge-Stage]][Link-Stage-Page] | [![Build Status][Badge-Circle]][Link-Circle] | [![Release Artifacts][Badge-SonatypeReleases]][Link-SonatypeReleases] | [![Snapshot Artifacts][Badge-SonatypeSnapshots]][Link-SonatypeSnapshots] | [![Badge-Discord]][Link-Discord] |
 
 # Summary
-TODO: Tagline
+
+ZIO Cache makes it easy to cache values to optimize your application's performance.
+
+ZIO Cache features:
+1. Deep integration with ZIO including support for concurrent lookups, failure, and interruption.
+2. Unified interface for synchronous and asynchronous caches.
+3. Compositional definition of a cache in terms of a lookup function allowing building complex systems such as an in-memory cache with arbitrary backends.
+
+Check out the microsite for more information!
 
 # Documentation
 [ZIO Cache Microsite](https://zio.github.io/zio-cache/)

@@ -1,9 +1,24 @@
 package java.util.concurrent.atomic
 
+/**
+ * An implementation of `LongAdder` for Scala.js.
+ */
 class LongAdder {
+
+  /**
+   * The current value.
+   */
   private var value: Long = 0L
-  def increment(): Unit   =
+
+  /**
+   * Increments the current value.
+   */
+  def increment(): Unit =
     value += 1
-  def longValue: Long     =
+
+  /**
+   * Returns the current value.
+   */
+  def longValue: Long =
     value
 }
