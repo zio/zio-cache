@@ -1,0 +1,107 @@
+<!DOCTYPE html><html lang="en"><head><meta charSet="utf-8"/><meta http-equiv="X-UA-Compatible" content="IE=edge"/><title>Cache · ZIO Cache</title><meta name="viewport" content="width=device-width, initial-scale=1.0"/><meta name="generator" content="Docusaurus"/><meta name="description" content="A cache is defined in terms of a lookup function, a capacity, and a time to live."/><meta name="docsearch:language" content="en"/><meta property="og:title" content="Cache · ZIO Cache"/><meta property="og:type" content="website"/><meta property="og:url" content="https://zio.github.io/zio-cache/"/><meta property="og:description" content="A cache is defined in terms of a lookup function, a capacity, and a time to live."/><meta property="og:image" content="https://zio.github.io/zio-cache/img/undraw_online.svg"/><meta name="twitter:card" content="summary"/><meta name="twitter:image" content="https://zio.github.io/zio-cache/img/undraw_tweetstorm.svg"/><link rel="shortcut icon" href="/zio-cache/img/favicon.png"/><link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/9.12.0/styles/default.min.css"/><script type="text/javascript" src="https://buttons.github.io/buttons.js"></script><script src="https://unpkg.com/vanilla-back-to-top@7.1.14/dist/vanilla-back-to-top.min.js"></script><script>
+        document.addEventListener('DOMContentLoaded', function() {
+          addBackToTop(
+            {"zIndex":100,"cornerOffset":100}
+          )
+        });
+        </script><script src="/zio-cache/js/scrollSpy.js"></script><link rel="stylesheet" href="/zio-cache/css/main.css"/><script src="/zio-cache/js/codetabs.js"></script></head><body class="sideNavVisible separateOnPageNav"><div class="fixedHeaderContainer"><div class="headerWrapper wrapper"><header><a href="/zio-cache/"><img class="logo" src="/zio-cache/img/navbar_brand2x.png" alt="ZIO Cache"/><h2 class="headerTitleWithLogo">ZIO Cache</h2></a><div class="navigationWrapper navigationSlider"><nav class="slidingNav"><ul class="nav-site nav-site-internal"><li class="siteNavGroupActive"><a href="/zio-cache/docs/overview/overview_index" target="_self">Overview</a></li><li class=""><a href="/zio-cache/docs/usecases/usecases_index" target="_self">Use Cases</a></li><li class=""><a href="api/index.html" target="_self">API</a></li><li class=""><a href="/zio-cache/docs/about/about_index" target="_self">About</a></li></ul></nav></div></header></div></div><div class="navPusher"><div class="docMainWrapper wrapper"><div class="docsNavContainer" id="docsNav"><nav class="toc"><div class="toggleNav"><section class="navWrapper wrapper"><div class="navBreadcrumb wrapper"><div class="navToggle" id="navToggler"><div class="hamburger-menu"><div class="line1"></div><div class="line2"></div><div class="line3"></div></div></div><h2><i>›</i><span>Overview</span></h2><div class="tocToggler" id="tocToggler"><i class="icon-toc"></i></div></div><div class="navGroups"><div class="navGroup"><h3 class="navGroupCategoryTitle">Overview</h3><ul class=""><li class="navListItem"><a class="navItem" href="/zio-cache/docs/overview/overview_index">Summary</a></li><li class="navListItem"><a class="navItem" href="/zio-cache/docs/overview/overview_lookup">Lookup</a></li><li class="navListItem navListItemActive"><a class="navItem" href="/zio-cache/docs/overview/overview_cache">Cache</a></li><li class="navListItem"><a class="navItem" href="/zio-cache/docs/overview/overview_cache_statistics">Cache Statistics</a></li><li class="navListItem"><a class="navItem" href="/zio-cache/docs/overview/overview_entry_statistics">Entry Statistics</a></li></ul></div></div></section></div><script>
+            var coll = document.getElementsByClassName('collapsible');
+            var checkActiveCategory = true;
+            for (var i = 0; i < coll.length; i++) {
+              var links = coll[i].nextElementSibling.getElementsByTagName('*');
+              if (checkActiveCategory){
+                for (var j = 0; j < links.length; j++) {
+                  if (links[j].classList.contains('navListItemActive')){
+                    coll[i].nextElementSibling.classList.toggle('hide');
+                    coll[i].childNodes[1].classList.toggle('rotate');
+                    checkActiveCategory = false;
+                    break;
+                  }
+                }
+              }
+
+              coll[i].addEventListener('click', function() {
+                var arrow = this.childNodes[1];
+                arrow.classList.toggle('rotate');
+                var content = this.nextElementSibling;
+                content.classList.toggle('hide');
+              });
+            }
+
+            document.addEventListener('DOMContentLoaded', function() {
+              createToggler('#navToggler', '#docsNav', 'docsSliderActive');
+              createToggler('#tocToggler', 'body', 'tocActive');
+
+              var headings = document.querySelector('.toc-headings');
+              headings && headings.addEventListener('click', function(event) {
+                var el = event.target;
+                while(el !== headings){
+                  if (el.tagName === 'A') {
+                    document.body.classList.remove('tocActive');
+                    break;
+                  } else{
+                    el = el.parentNode;
+                  }
+                }
+              }, false);
+
+              function createToggler(togglerSelector, targetSelector, className) {
+                var toggler = document.querySelector(togglerSelector);
+                var target = document.querySelector(targetSelector);
+
+                if (!toggler) {
+                  return;
+                }
+
+                toggler.onclick = function(event) {
+                  event.preventDefault();
+
+                  target.classList.toggle(className);
+                };
+              }
+            });
+        </script></nav></div><div class="container mainContainer docsContainer"><div class="wrapper"><div class="post"><header class="postHeader"><h1 id="__docusaurus" class="postHeaderTitle">Cache</h1></header><article><div><span><p>A cache is defined in terms of a lookup function, a capacity, and a time to live.</p>
+<pre><code class="hljs css language-scala"><span class="hljs-keyword">import</span> zio._
+<span class="hljs-keyword">import</span> zio.duration._
+
+<span class="hljs-class"><span class="hljs-keyword">trait</span> <span class="hljs-title">Lookup</span>[-<span class="hljs-type">Key</span>, -<span class="hljs-type">Environment</span>, +<span class="hljs-type">Error</span>, +<span class="hljs-type">Value</span>]</span>
+
+<span class="hljs-class"><span class="hljs-keyword">trait</span> <span class="hljs-title">Cache</span>[-<span class="hljs-type">Key</span>, +<span class="hljs-type">Error</span>, +<span class="hljs-type">Value</span>] </span>{
+  <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">get</span></span>(k: <span class="hljs-type">Key</span>): <span class="hljs-type">IO</span>[<span class="hljs-type">Error</span>, <span class="hljs-type">Value</span>]
+}
+
+<span class="hljs-class"><span class="hljs-keyword">object</span> <span class="hljs-title">Cache</span> </span>{
+
+  <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">make</span></span>[<span class="hljs-type">Key</span>, <span class="hljs-type">Environment</span>, <span class="hljs-type">Error</span>, <span class="hljs-type">Value</span>](
+    capacity: <span class="hljs-type">Int</span>,
+    timeToLive: <span class="hljs-type">Duration</span>,
+    lookup: <span class="hljs-type">Lookup</span>[<span class="hljs-type">Key</span>, <span class="hljs-type">Environment</span>, <span class="hljs-type">Error</span>, <span class="hljs-type">Value</span>]
+  ): <span class="hljs-type">ZIO</span>[<span class="hljs-type">Environment</span>, <span class="hljs-type">Nothing</span>, <span class="hljs-type">Cache</span>[<span class="hljs-type">Key</span>, <span class="hljs-type">Error</span>, <span class="hljs-type">Value</span>]] =
+    ???
+}
+</code></pre>
+<p>The most fundamental operator on a cache is <code>get</code>, which either returns the value in the cache if it exists or else computes a new value with the lookup function, puts it in the cache, and returns it.</p>
+<h2><a class="anchor" aria-hidden="true" id="concurrent-access"></a><a href="#concurrent-access" aria-hidden="true" class="hash-link"><svg class="hash-link-icon" aria-hidden="true" height="16" version="1.1" viewBox="0 0 16 16" width="16"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Concurrent Access</h2>
+<p>The cache is guaranteed to be safe for concurrent access. In addition, getting a value from the cache is efficient under concurrency.</p>
+<p>If two concurrent processes attempt to get the same value and it does not exist in the cache, the value will be computed once and provided to both concurent processes as soon as it is available. The concurrent processes will semantically block for the value to become available but no underlying operating system threads will block as a result of this operation.</p>
+<p>In the event that the computation of the lookup function fails or is interrupted that will automatically be propagated to any concurrent processes waiting for the same value.</p>
+<p>Failures will be cached and made available to subsequent calls to <code>get</code> to avoid repeatedly computing the same failed value. In the event of interruption the key will be removed from the cache so subsequent calls to <code>get</code> will attempt to compute the value again.</p>
+<h2><a class="anchor" aria-hidden="true" id="capacity"></a><a href="#capacity" aria-hidden="true" class="hash-link"><svg class="hash-link-icon" aria-hidden="true" height="16" version="1.1" viewBox="0 0 16 16" width="16"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Capacity</h2>
+<p>A cache is constructed with a specified capacity. When the cache is at capacity the least recently accessed values will be removed first.</p>
+<p>Note that the size of the cache may slightly exceed the specified capacity between operations.</p>
+<h2><a class="anchor" aria-hidden="true" id="time-to-live"></a><a href="#time-to-live" aria-hidden="true" class="hash-link"><svg class="hash-link-icon" aria-hidden="true" height="16" version="1.1" viewBox="0 0 16 16" width="16"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Time To Live</h2>
+<p>A cache also allows specifying a time to live. The cache guarantees that no value will be returned from the cache if its age is greater than or equal to the specified time to live.</p>
+<p>The age is calculated based on the interval between when the value was loaded in the cache and when it is accessed.</p>
+<h2><a class="anchor" aria-hidden="true" id="operators"></a><a href="#operators" aria-hidden="true" class="hash-link"><svg class="hash-link-icon" aria-hidden="true" height="16" version="1.1" viewBox="0 0 16 16" width="16"><path fill-rule="evenodd" d="M4 9h1v1H4c-1.5 0-3-1.69-3-3.5S2.55 3 4 3h4c1.45 0 3 1.69 3 3.5 0 1.41-.91 2.72-2 3.25V8.59c.58-.45 1-1.27 1-2.09C10 5.22 8.98 4 8 4H4c-.98 0-2 1.22-2 2.5S3 9 4 9zm9-3h-1v1h1c1 0 2 1.22 2 2.5S13.98 12 13 12H9c-.98 0-2-1.22-2-2.5 0-.83.42-1.64 1-2.09V6.25c-1.09.53-2 1.84-2 3.25C6 11.31 7.55 13 9 13h4c1.45 0 3-1.69 3-3.5S14.5 6 13 6z"></path></svg></a>Operators</h2>
+<p>In addition to <code>get</code>, <code>Cache</code> provides a variety of other operators.</p>
+<pre><code class="hljs css language-scala"><span class="hljs-class"><span class="hljs-keyword">trait</span> <span class="hljs-title">Cache</span>[-<span class="hljs-type">Key</span>, +<span class="hljs-type">Error</span>, +<span class="hljs-type">Value</span>] </span>{
+  <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">cacheStats</span></span>: <span class="hljs-type">UIO</span>[<span class="hljs-type">CacheStats</span>]
+  <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">contains</span></span>(key: <span class="hljs-type">Key</span>): <span class="hljs-type">UIO</span>[<span class="hljs-type">Boolean</span>]
+  <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">entryStats</span></span>(key: <span class="hljs-type">Key</span>): <span class="hljs-type">UIO</span>[<span class="hljs-type">Option</span>[<span class="hljs-type">EntryStats</span>]]
+  <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">size</span></span>: <span class="hljs-type">UIO</span>[<span class="hljs-type">Int</span>]
+}
+</code></pre>
+<p>The <code>size</code> operator returns the current size of the cache. Under concurrent access the size should be regarded as only approximate since by the time we observe a given size the cache may have a different size based on concurrent insertions or removals.</p>
+<p>Similarly, the <code>contains</code> operator returns whether a value associated with the specified key exists in the cache. Again, under concurrent access <code>contains</code> is guaranteed to return whether the cache contains a value associated with the specified key as of a given point in time but that value may be concurrently added or removed immediately after that.</p>
+<p>There are also the <code>cacheStats</code> and <code>entryStats</code> operators which allow obtaining a snapshot of statistics either for the cache itself or for a specified entry. See the sections on cache statistics and entry statistics for further discussion of this functionality.</p>
+</span></div></article></div><div class="docs-prevnext"><a class="docs-prev button" href="/zio-cache/docs/overview/overview_lookup"><span class="arrow-prev">← </span><span>Lookup</span></a><a class="docs-next button" href="/zio-cache/docs/overview/overview_cache_statistics"><span>Cache Statistics</span><span class="arrow-next"> →</span></a></div></div></div><nav class="onPageNav"><ul class="toc-headings"><li><a href="#concurrent-access">Concurrent Access</a></li><li><a href="#capacity">Capacity</a></li><li><a href="#time-to-live">Time To Live</a></li><li><a href="#operators">Operators</a></li></ul></nav></div><footer class="nav-footer" id="footer"><section class="sitemap"><a href="/zio-cache/" class="nav-home"><img src="/zio-cache/img/sidebar_brand2x.png" alt="ZIO Cache"/></a><div><h5>GitHub</h5><a class="github-button" href="https://github.com/zio/zio-cache" data-icon="octicon-star" data-count-href="/zio/zio-cache/stargazers" data-show-count="true" data-count-aria-label="# stargazers on GitHub" aria-label="Star this project on GitHub">Star</a></div><div><h5>Chat with us on Discord</h5><a href="https://discord.gg/2ccFBr4"><img src="/zio-cache//img/discord.png" width="120" alt="discord"/></a></div><div><h5>Additional resources</h5><a href="/zio-cache/api/index.html">Scaladoc of zio-cache</a></div></section><section class="copyright">Copyright © 2021 ZIO Maintainers</section></footer></div></body></html>
