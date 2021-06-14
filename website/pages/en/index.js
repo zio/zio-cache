@@ -97,11 +97,11 @@ class Index extends React.Component {
                 style={{textAlign: 'center'}}>
                 <h2>Welcome to ZIO Cache</h2>
                 <MarkdownBlock>
-                    TODO: Tagline
+                    ZIO Cache is a library that makes it easy to optimize the performance of your application
                 </MarkdownBlock>
 
                 <MarkdownBlock>
-                    TODO: Long description (paragraph)
+                    ZIO Cache features deep ZIO integration and a compositional definition of a cache in terms of a lookup function that unifies synchronous and asynchronous interfaces
                 </MarkdownBlock>
             </div>
         );
@@ -110,16 +110,16 @@ class Index extends React.Component {
             <Block layout="fourColumn">
                 {[
                     {
-                        content: 'TODO: Content 1',
+                        content: 'Deep ZIO integration including support for concurrent lookups, failure, and interruption',
                         image: `${baseUrl}img/undraw_tweetstorm.svg`,
                         imageAlign: 'top',
-                        title: 'TODO: Title 1',
+                        title: 'Deep ZIO Integration',
                     },
                     {
-                        content: 'TODO: Content 2',
+                        content: 'Compositional definition of cache in terms of lookup function unifies synchronous and asynchronous caches',
                         image: `${baseUrl}img/undraw_operating_system.svg`,
                         imageAlign: 'top',
-                        title: 'TODO: Title 2',
+                        title: 'Compositional Interface',
                     },
                 ]}
             </Block>
