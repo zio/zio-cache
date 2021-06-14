@@ -11,7 +11,7 @@ ZIO Cache makes it easy to cache values to optimize your application's performan
 ZIO Cache features:
 * **ZIO Native** - Deep ZIO integration including support for concurrent lookups, failure, and interruption.
 * **Simple** - Unified interface for synchronous and asynchronous caches.
-* **Compositional** - Definition of cache in terms of lookup function allowing building complex caches with arbitrary backends in addition to simple ones.
+* **Compositional** - Definition of cache in terms of lookup function allows supporting arbitrary backends.
 
 Check out the microsite for more information!
 
