@@ -1,7 +1,10 @@
 package zio.cache
 
+import com.github.ghik.silencer.silent
+
 import java.util.{HashMap, Map}
 
+@silent("never used")
 private object Platform {
 
   /**
