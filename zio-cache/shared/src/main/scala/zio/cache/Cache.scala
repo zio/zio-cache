@@ -51,6 +51,11 @@ trait Cache[-Key, +Error, +Value] {
   def get(key: Key): IO[Error, Value]
 
   /**
+   * Invalidates the value associated with the specified key.
+   */
+  def invalidate(key: Key): UIO[Unit]
+
+  /**
    * Returns the approximate number of values in the cache.
    */
   def size: UIO[Int]
@@ -114,6 +119,24 @@ object Cache {
 
         new Cache[Key, Error, Value] {
 
+          def cacheStats: UIO[CacheStats] =
+            ZIO.succeed(CacheStats(hits.longValue, misses.longValue))
+
+          def contains(k: Key): UIO[Boolean] =
+            ZIO.succeed(map.containsKey(k))
+
+          def entryStats(k: Key): UIO[Option[EntryStats]] =
+            ZIO.succeed {
+              val value = map.get(k)
+              if (value eq null) None
+              else {
+                value match {
+                  case MapValue.Pending(_, _)              => None
+                  case MapValue.Complete(_, _, entryState) => Some(EntryStats(entryState.loaded))
+                }
+              }
+            }
+
           def get(k: Key): IO[Error, Value] =
             ZIO.effectSuspendTotal {
               var key: MapKey[Key]               = null
@@ -160,26 +183,14 @@ object Cache {
 
             }
 
-          def contains(k: Key): UIO[Boolean] =
-            ZIO.succeed(map.containsKey(k))
+          def invalidate(k: Key): UIO[Unit] =
+            ZIO.succeed {
+              map.remove(k)
+              ()
+            }
 
           def size: UIO[Int] =
             ZIO.succeed(map.size)
-
-          def cacheStats: UIO[CacheStats] =
-            ZIO.succeed(CacheStats(hits.longValue, misses.longValue))
-
-          def entryStats(k: Key): UIO[Option[EntryStats]] =
-            ZIO.succeed {
-              val value = map.get(k)
-              if (value eq null) None
-              else {
-                value match {
-                  case MapValue.Pending(_, _)              => None
-                  case MapValue.Complete(_, _, entryState) => Some(EntryStats(entryState.loaded))
-                }
-              }
-            }
         }
       }
     }

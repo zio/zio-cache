@@ -21,6 +21,28 @@ object CacheSpec extends DefaultRunnableSpec {
   ] with Has[Clock.Service] with Has[zio.console.Console.Service] with Has[zio.system.System.Service] with Has[
     Random.Service
   ] with Has[Blocking.Service], TestFailure[Any], TestSuccess] = suite("CacheSpec")(
+    testM("cacheStats") {
+      checkM(Gen.anyInt) { salt =>
+        for {
+          cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
+          _          <- ZIO.foreachPar((1 to 100).map(_ / 2))(cache.get)
+          cacheStats <- cache.cacheStats
+          hits        = cacheStats.hits
+          misses      = cacheStats.misses
+        } yield assert(hits)(equalTo(49L)) &&
+          assert(misses)(equalTo(51L))
+      }
+    },
+    testM("invalidate") {
+      checkM(Gen.anyInt) { salt =>
+        for {
+          cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
+          _        <- ZIO.foreach(1 to 100)(cache.get)
+          _        <- cache.invalidate(42)
+          contains <- cache.contains(42)
+        } yield assert(contains)(isFalse)
+      }
+    },
     suite("lookup")(
       testM("sequential") {
         checkM(Gen.anyInt) { salt =>
@@ -57,18 +79,6 @@ object CacheSpec extends DefaultRunnableSpec {
           _     <- ZIO.foreach((1 to 100))(cache.get)
           size  <- cache.size
         } yield assert(size)(equalTo(10))
-      }
-    },
-    testM("cacheStats") {
-      checkM(Gen.anyInt) { salt =>
-        for {
-          cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
-          _          <- ZIO.foreachPar((1 to 100).map(_ / 2))(cache.get)
-          cacheStats <- cache.cacheStats
-          hits        = cacheStats.hits
-          misses      = cacheStats.misses
-        } yield assert(hits)(equalTo(49L)) &&
-          assert(misses)(equalTo(51L))
       }
     }
   )
