@@ -13,11 +13,6 @@ inThisBuild(
         url("http://degoes.net")
       )
     ),
-    addCompilerPlugin(scalafixSemanticdb),
-    scalacOptions ++= List(
-      "-Yrangepos",
-      "-P:semanticdb:synthetics:on"
-    ),
     pgpPassphrase := sys.env.get("PGP_PASSWORD").map(_.toArray),
     pgpPublicRing := file("/tmp/public.asc"),
     pgpSecretRing := file("/tmp/secret.asc")
