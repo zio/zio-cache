@@ -33,7 +33,7 @@ const siteConfig = {
   headerLinks: [
     {doc: 'overview/overview_index', label: 'Overview'},
     {doc: 'usecases/usecases_index', label: 'Use Cases'},
-    {href: 'api/index.html', label: 'API'},
+    {href: '/zio-cache/api/index.html', label: 'API'},
     {doc: 'about/about_index', label: 'About'}
   ],
 
