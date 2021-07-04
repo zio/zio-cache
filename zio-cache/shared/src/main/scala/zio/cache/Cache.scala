@@ -72,6 +72,17 @@ object Cache {
     timeToLive: Duration,
     lookup: Lookup[Key, Environment, Error, Value]
   ): URIO[Environment, Cache[Key, Error, Value]] =
+    makeWith(capacity, lookup)(_ => timeToLive)
+
+  /**
+   * Constructs a new cache with the specified capacity, time to live, and
+   * lookup function, where the time to live can depend on the `Exit` value
+   * returned by the lookup function.
+   */
+  def makeWith[Key, Environment, Error, Value](
+    capacity: Int,
+    lookup: Lookup[Key, Environment, Error, Value]
+  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment, Cache[Key, Error, Value]] =
     ZIO.environment[Environment].flatMap { environment =>
       ZIO.fiberId.map { fiberId =>
         val cacheState = CacheState.initial[Key, Error, Value]()
@@ -131,8 +142,8 @@ object Cache {
               if (value eq null) None
               else {
                 value match {
-                  case MapValue.Pending(_, _)              => None
-                  case MapValue.Complete(_, _, entryState) => Some(EntryStats(entryState.loaded))
+                  case MapValue.Pending(_, _)                 => None
+                  case MapValue.Complete(_, _, entryState, _) => Some(EntryStats(entryState.loaded))
                 }
               }
             }
@@ -157,22 +168,21 @@ object Cache {
                     val now        = Instant.now()
                     val entryStats = EntryStats(now)
 
-                    map.put(k, MapValue.Complete(key, exit, entryStats))
+                    map.put(k, MapValue.Complete(key, exit, entryStats, now.plus(timeToLive(exit))))
                     promise.done(exit) *> ZIO.done(exit)
                   }
                   .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(k)))
               } else {
                 value match {
-                  case MapValue.Pending(key, promise)           =>
+                  case MapValue.Pending(key, promise)                       =>
                     trackAccess(key)
                     trackHit()
                     promise.await
-                  case MapValue.Complete(key, exit, entryState) =>
+                  case MapValue.Complete(key, exit, entryState, timeToLive) =>
                     trackAccess(key)
                     trackHit()
-                    val now  = Instant.now()
-                    val life = Duration.between(entryState.loaded, now)
-                    if (life.compareTo(timeToLive) >= 0) {
+                    val now = Instant.now()
+                    if (now.isAfter(timeToLive)) {
                       map.remove(k, value)
                       get(k)
                     } else {
@@ -213,8 +223,12 @@ object Cache {
   private object MapValue {
     final case class Pending[Key, Error, Value](key: MapKey[Key], promise: Promise[Error, Value])
         extends MapValue[Key, Error, Value]
-    final case class Complete[Key, Error, Value](key: MapKey[Key], exit: Exit[Error, Value], entryStats: EntryStats)
-        extends MapValue[Key, Error, Value]
+    final case class Complete[Key, Error, Value](
+      key: MapKey[Key],
+      exit: Exit[Error, Value],
+      entryStats: EntryStats,
+      timeToLive: Instant
+    ) extends MapValue[Key, Error, Value]
   }
 
   /**
