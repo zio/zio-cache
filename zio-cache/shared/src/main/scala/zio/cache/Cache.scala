@@ -1,7 +1,7 @@
 package zio.cache
 
 import zio.internal.MutableConcurrentQueue
-import zio.{Exit, IO, Promise, UIO, URIO, ZIO}
+import zio.{Chunk, ChunkBuilder, Exit, IO, Promise, UIO, URIO, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
@@ -44,11 +44,11 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   def entryStats(key: Key): UIO[Option[EntryStats]]
 
   /**
-   * Retrieves the value associated with the specified key if it exists.
-   * Otherwise computes the value with the lookup function, puts it in the
-   * cache, and returns it.
+   * Retrieves the values associated with the specified keys if they exist.
+   * Otherwise computes the values with the lookupfunction, puts them in the
+   * cache, and returns them.
    */
-  def get(key: Key): IO[Error, Value]
+  def getAll(keys: Iterable[Key]): IO[Error, Chunk[Value]]
 
   /**
    * Invalidates the value associated with the specified key.
@@ -59,6 +59,14 @@ sealed abstract class Cache[-Key, +Error, +Value] {
    * Returns the approximate number of values in the cache.
    */
   def size: UIO[Int]
+
+  /**
+   * Retrieves the value associated with the specified key if it exists.
+   * Otherwise computes the value with the lookup function, puts it in the
+   * cache, and returns it.
+   */
+  final def get(key: Key): IO[Error, Value] =
+    getAll(Chunk(key)).map(_.head)
 }
 
 object Cache {
@@ -137,50 +145,80 @@ object Cache {
               }
             }
 
-          def get(k: Key): IO[Error, Value] =
+          def getAll(keys: Iterable[Key]): IO[Error, Chunk[Value]] =
             ZIO.effectSuspendTotal {
-              var key: MapKey[Key]               = null
-              var promise: Promise[Error, Value] = null
-              var value                          = map.get(k)
-              if (value eq null) {
-                promise = Promise.unsafeMake[Error, Value](fiberId)
-                key = new MapKey(k)
-                value = map.putIfAbsent(k, MapValue.Pending(key, promise))
-              }
-              if (value eq null) {
-                trackAccess(key)
-                trackMiss()
-                lookup(k)
-                  .provide(environment)
-                  .run
-                  .flatMap { exit =>
-                    val now        = Instant.now()
-                    val entryStats = EntryStats(now)
-
-                    map.put(k, MapValue.Complete(key, exit, entryStats))
-                    promise.done(exit) *> ZIO.done(exit)
+              val builder          = ChunkBuilder.make[MapValue.Pending[Key, Error, Value]]()
+              val iterator         = keys.iterator
+              val size             = keys.size
+              val values           = Array.ofDim[MapValue[Key, Error, Value]](size)
+              var i                = 0
+              while (iterator.hasNext) {
+                val key   = iterator.next()
+                val value = map.get(key)
+                if (value eq null) {
+                  val promise = Promise.unsafeMake[Error, Value](fiberId)
+                  val pending = MapValue.Pending(new MapKey(key), promise)
+                  val value   = map.putIfAbsent(key, pending)
+                  if (value eq null) {
+                    trackMiss()
+                    builder.addOne(pending)
+                    values(i) = pending
+                  } else {
+                    trackHit()
+                    values(i) = value
                   }
-                  .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(k)))
-              } else {
+                } else {
+                  trackHit()
+                  values(i) = value
+                }
+                i += 1
+              }
+              val pending          = builder.result()
+              pending.foreach(pending => trackAccess(pending.key))
+              val completePromises = lookup(pending.map(_.key.value))
+                .provide(environment)
+                .run
+                .flatMap { exit =>
+                  val now        = Instant.now()
+                  val entryStats = EntryStats(now)
+
+                  exit match {
+                    case Exit.Success(values) =>
+                      ZIO.foreach_(pending.zip(values)) { case (pending, value) =>
+                        map.put(pending.key.value, MapValue.Complete(pending.key, Exit.succeed(value), entryStats))
+                        pending.promise.succeed(value)
+                      }
+
+                    case Exit.Failure(cause) =>
+                      ZIO.foreach_(pending) { pending =>
+                        map.put(pending.key.value, MapValue.Complete(pending.key, Exit.halt(cause), entryStats))
+                        pending.promise.halt(cause)
+                      }
+                  }
+                }
+                .onInterrupt(
+                  ZIO.collectAll(pending.map(_.promise.interrupt)) *>
+                    ZIO.succeed(pending.foreach(key => map.remove(key.key)))
+                )
+              val awaitResults     = ZIO.foreach(Chunk.fromArray(values)) { value =>
                 value match {
                   case MapValue.Pending(key, promise)           =>
                     trackAccess(key)
-                    trackHit()
                     promise.await
                   case MapValue.Complete(key, exit, entryState) =>
                     trackAccess(key)
-                    trackHit()
                     val now  = Instant.now()
                     val life = Duration.between(entryState.loaded, now)
                     if (life.compareTo(timeToLive) >= 0) {
-                      map.remove(k, value)
-                      get(k)
+                      map.remove(key.value, value)
+                      get(key.value)
                     } else {
                       ZIO.done(exit)
                     }
                 }
               }
 
+              completePromises *> awaitResults
             }
 
           def invalidate(k: Key): UIO[Unit] =
