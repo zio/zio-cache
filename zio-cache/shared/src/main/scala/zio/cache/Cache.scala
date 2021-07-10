@@ -161,7 +161,7 @@ object Cache {
                   val value   = map.putIfAbsent(key, pending)
                   if (value eq null) {
                     trackMiss()
-                    builder.addOne(pending)
+                    builder += pending
                     values(i) = pending
                   } else {
                     trackHit()
