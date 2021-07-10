@@ -200,7 +200,7 @@ object Cache {
                   ZIO.collectAll(pending.map(_.promise.interrupt)) *>
                     ZIO.succeed(pending.foreach(key => map.remove(key.key)))
                 )
-              val awaitResults     = ZIO.foreach(Chunk.fromArray(values)) { value =>
+              val awaitResults     = IO.foreach(Chunk.fromArray(values)) { value =>
                 value match {
                   case MapValue.Pending(key, promise)           =>
                     trackAccess(key)
