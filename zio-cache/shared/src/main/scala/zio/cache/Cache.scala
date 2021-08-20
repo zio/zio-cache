@@ -174,11 +174,11 @@ object Cache {
                   .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(k)))
               } else {
                 value match {
-                  case MapValue.Pending(key, promise)                       =>
+                  case MapValue.Pending(key, promise)              =>
                     trackAccess(key)
                     trackHit()
                     promise.await
-                  case MapValue.Complete(key, exit, entryState, timeToLive) =>
+                  case MapValue.Complete(key, exit, _, timeToLive) =>
                     trackAccess(key)
                     trackHit()
                     val now = Instant.now()
