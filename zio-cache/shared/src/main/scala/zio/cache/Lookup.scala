@@ -3,7 +3,7 @@ package zio.cache
 import zio.ZIO
 
 /**
- * A `Lookup` represnts a lookup function that, given a key of type `Key`, can
+ * A `Lookup` represents a lookup function that, given a key of type `Key`, can
  * return a `ZIO` effect that will either produce a value of type `Value` or
  * fail with an error of type `Error` using an environment of type
  * `Environment`.
