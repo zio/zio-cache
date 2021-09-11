@@ -1,8 +1,7 @@
 package zio.cache
 
 import org.openjdk.jmh.annotations._
-import zio.duration._
-import zio.{BootstrapRuntime, ZIO}
+import zio._
 
 import java.util.concurrent.TimeUnit
 
@@ -31,7 +30,7 @@ class ChurnBenchmark extends BootstrapRuntime {
     cache = unsafeRun(
       for {
         cache <- Cache.make(size, Duration.Infinity, identityLookup)
-        _     <- ZIO.foreach_(strings)(cache.get(_))
+        _     <- ZIO.foreachDiscard(strings)(cache.get(_))
       } yield cache
     )
   }
@@ -40,7 +39,7 @@ class ChurnBenchmark extends BootstrapRuntime {
   def zioCacheChurn(): Unit =
     unsafeRun(
       for {
-        _ <- ZIO.foreach_(newEntries)(cache.get(_))
+        _ <- ZIO.foreachDiscard(newEntries)(cache.get(_))
       } yield ()
     )
 }

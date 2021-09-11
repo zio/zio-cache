@@ -1,7 +1,6 @@
 package zio.cache
 
 import zio._
-import zio.duration._
 import zio.test.Assertion._
 import zio.test._
 
@@ -11,7 +10,7 @@ object CacheSpec extends DefaultRunnableSpec {
     y => ZIO.succeed((x ^ y).hashCode)
 
   def spec: ZSpec[Environment, Failure] = suite("CacheSpec")(
-    testM("cacheStats") {
+    test("cacheStats") {
       checkM(Gen.anyInt) { salt =>
         for {
           cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
@@ -23,7 +22,7 @@ object CacheSpec extends DefaultRunnableSpec {
           assert(misses)(equalTo(51L))
       }
     },
-    testM("invalidate") {
+    test("invalidate") {
       checkM(Gen.anyInt) { salt =>
         for {
           cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
@@ -34,7 +33,7 @@ object CacheSpec extends DefaultRunnableSpec {
       }
     },
     suite("lookup")(
-      testM("sequential") {
+      test("sequential") {
         checkM(Gen.anyInt) { salt =>
           for {
             cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
@@ -43,7 +42,7 @@ object CacheSpec extends DefaultRunnableSpec {
           } yield assert(actual)(equalTo(expected))
         }
       },
-      testM("concurrent") {
+      test("concurrent") {
         checkM(Gen.anyInt) { salt =>
           for {
             cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
@@ -52,7 +51,7 @@ object CacheSpec extends DefaultRunnableSpec {
           } yield assert(actual)(equalTo(expected))
         }
       },
-      testM("capacity") {
+      test("capacity") {
         checkM(Gen.anyInt) { salt =>
           for {
             cache    <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
@@ -62,7 +61,7 @@ object CacheSpec extends DefaultRunnableSpec {
         }
       }
     ),
-    testM("size") {
+    test("size") {
       checkM(Gen.anyInt) { salt =>
         for {
           cache <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))

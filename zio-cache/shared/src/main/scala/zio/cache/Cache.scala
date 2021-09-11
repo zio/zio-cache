@@ -149,7 +149,7 @@ object Cache {
             }
 
           def get(k: Key): IO[Error, Value] =
-            ZIO.effectSuspendTotal {
+            ZIO.suspendSucceed {
               var key: MapKey[Key]               = null
               var promise: Promise[Error, Value] = null
               var value                          = map.get(k)
@@ -163,7 +163,7 @@ object Cache {
                 trackMiss()
                 lookup(k)
                   .provide(environment)
-                  .run
+                  .exit
                   .flatMap { exit =>
                     val now        = Instant.now()
                     val entryStats = EntryStats(now)
