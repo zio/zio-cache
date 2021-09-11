@@ -20,8 +20,6 @@ The lookup function takes a key of type `Key` and returns a `ZIO` effect that re
 We construct a cache using a lookup function as well as a maximum size and a time to live.
 
 ```scala mdoc
-import zio.duration._
-
 trait Cache[-Key, +Error, +Value] {
   def get(k: Key): IO[Error, Value]
 }

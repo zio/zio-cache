@@ -7,7 +7,6 @@ A cache is defined in terms of a lookup function, a capacity, and a time to live
 
 ```scala mdoc
 import zio._
-import zio.duration._
 
 trait Lookup[-Key, -Environment, +Error, +Value]
 
