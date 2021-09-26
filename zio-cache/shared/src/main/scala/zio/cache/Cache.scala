@@ -178,7 +178,7 @@ object Cache {
               if (value eq null) {
                 trackAccess(key)
                 trackMiss()
-                retrieveFor(key, promise)
+                lookupValueOf(k, promise)
               } else {
                 value match {
                   case MapValue.Pending(key, promise)              =>
@@ -196,10 +196,10 @@ object Cache {
                       ZIO.done(exit)
                     }
                   case MapValue.Refreshing(
-                        MapValue.Pending(_, promiseInProgress),
-                        MapValue.Complete(_, currentResult, _, ttl)
+                        promiseInProgress,
+                        MapValue.Complete(mapKey, currentResult, _, ttl)
                       ) =>
-                    trackAccess(key)
+                    trackAccess(mapKey)
                     trackHit()
                     val now = Instant.now()
                     if (now.isAfter(ttl)) {
@@ -222,33 +222,29 @@ object Cache {
                 value = map.putIfAbsent(k, MapValue.Pending(key, promise))
               }
               if (value eq null) {
-                retrieveFor(key, promise)
+                lookupValueOf(k, promise)
               } else {
                 value match {
-                  case MapValue.Pending(_, promiseInProgress)                         =>
+                  case MapValue.Pending(_, promiseInProgress)                             =>
                     promiseInProgress.await
-                  case completedResult @ MapValue.Complete(_, currentResult, _, ttl)  =>
+                  case completedResult @ MapValue.Complete(mapKey, currentResult, _, ttl) =>
                     val now = Instant.now()
                     if (now.isAfter(ttl)) {
                       map.remove(k, value)
                       get(k)
                     } else {
-                      if (promise eq null) {
-                        promise = Promise.unsafeMake[Error, Value](fiberId)
-                      }
-                      if (key eq null) {
-                        key = new MapKey(k)
-                      }
-                      val refreshInProgress = MapValue.Refreshing(
-                        MapValue.Pending(key, promise),
-                        completedResult
-                      )
-                      map.put(k, refreshInProgress)
+                      val refreshPromise    = Promise.unsafeMake[Error, Value](fiberId)
+                      val refreshInProgress = MapValue.Refreshing(refreshPromise, completedResult)
 
-                      retrieveFor(key, promise).fork *>
+                      if (map.replace(k, completedResult, refreshInProgress)) {
+                        // Only trigger the lookup if we're still the current value, `completedResult`
+                        lookupValueOf(mapKey.value, refreshPromise).fork *>
+                          ZIO.done(currentResult)
+                      } else {
                         ZIO.done(currentResult)
+                      }
                     }
-                  case MapValue.Refreshing(MapValue.Pending(_, promiseInProgress), _) =>
+                  case MapValue.Refreshing(promiseInProgress, _)                          =>
                     promiseInProgress.await
                 }
               }
@@ -268,15 +264,14 @@ object Cache {
           def size: UIO[Int] =
             ZIO.succeed(map.size)
 
-          private def retrieveFor(mapKey: MapKey[Key], promise: Promise[Error, Value]) = {
-            val key = mapKey.value
+          private def lookupValueOf(key: Key, promise: Promise[Error, Value]) =
             lookup(key)
               .provide(environment)
               .run
               .flatMap { lookupResult =>
                 val now             = Instant.now()
                 val completedResult = MapValue.Complete(
-                  mapKey,
+                  new MapKey(key),
                   lookupResult,
                   EntryStats(now),
                   now.plus(timeToLive(lookupResult))
@@ -289,7 +284,6 @@ object Cache {
               .onInterrupt(
                 promise.interrupt.as(map.remove(key))
               )
-          }
         }
       }
     }
@@ -323,7 +317,7 @@ object Cache {
     ) extends MapValue[Key, Error, Value]
 
     final case class Refreshing[Key, Error, Value](
-      pending: Pending[Key, Error, Value],
+      promise: Promise[Error, Value],
       complete: Complete[Key, Error, Value]
     ) extends MapValue[Key, Error, Value]
   }
