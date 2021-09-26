@@ -27,7 +27,7 @@ object CacheSpec extends DefaultRunnableSpec {
       checkM(Gen.anyInt) { salt =>
         for {
           cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
-          _        <- ZIO.foreach(1 to 100)(cache.get)
+          _        <- ZIO.foreach_(1 to 100)(cache.get)
           _        <- cache.invalidate(42)
           contains <- cache.contains(42)
         } yield assert(contains)(isFalse)
@@ -50,7 +50,7 @@ object CacheSpec extends DefaultRunnableSpec {
             cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
             actual   <- ZIO.foreach(1 to 100)(cache.get)
             expected <- ZIO.foreach(1 to 100)(hash(salt))
-          } yield assert(actual)(equalTo(expected))
+          } yield assertTrue(actual == expected)
         }
       },
       testM("concurrent") {
@@ -59,7 +59,7 @@ object CacheSpec extends DefaultRunnableSpec {
             cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
             actual   <- ZIO.foreachPar(1 to 100)(cache.get)
             expected <- ZIO.foreachPar(1 to 100)(hash(salt))
-          } yield assert(actual)(equalTo(expected))
+          } yield assertTrue(actual == expected)
         }
       },
       testM("capacity") {
@@ -68,17 +68,36 @@ object CacheSpec extends DefaultRunnableSpec {
             cache    <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
             actual   <- ZIO.foreachPar(1 to 100)(cache.get)
             expected <- ZIO.foreachPar(1 to 100)(hash(salt))
-          } yield assert(actual)(equalTo(expected))
+          } yield assertTrue(actual == expected)
         }
+      }
+    ),
+    suite("refresh")(
+      testM("should update the cache with a new value") {
+        var modifier = 1
+        def retrieve(x: Int) = {
+          modifier = modifier * 10
+          ZIO.succeed(x * modifier)
+        }
+        val key      = 123
+        for {
+          cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve))
+          val1  <- cache.get(key)
+          _     <- cache.refresh(key)
+          val2  <- cache.get(key)
+          val3  <- cache.get(key)
+        } yield assertTrue(val1 == key * 10) &&
+          assertTrue(val2 == key * 10 * 10) &&
+          assertTrue(val2 == val3)
       }
     ),
     testM("size") {
       checkM(Gen.anyInt) { salt =>
         for {
           cache <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
-          _     <- ZIO.foreach((1 to 100))(cache.get)
+          _     <- ZIO.foreach_(1 to 100)(cache.get)
           size  <- cache.size
-        } yield assert(size)(equalTo(10))
+        } yield assertTrue(size == 10)
       }
     }
   )
