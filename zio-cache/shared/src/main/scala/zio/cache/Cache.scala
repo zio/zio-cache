@@ -56,6 +56,11 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   def invalidate(key: Key): UIO[Unit]
 
   /**
+   * Invalidates all values in the cache.
+   */
+  def invalidateAll: UIO[Unit]
+
+  /**
    * Returns the approximate number of values in the cache.
    */
   def size: UIO[Int]
@@ -197,6 +202,11 @@ object Cache {
             ZIO.succeed {
               map.remove(k)
               ()
+            }
+
+          def invalidateAll: UIO[Unit] =
+            ZIO.succeed {
+              map.clear()
             }
 
           def size: UIO[Int] =

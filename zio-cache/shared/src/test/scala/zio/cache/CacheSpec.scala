@@ -33,6 +33,16 @@ object CacheSpec extends DefaultRunnableSpec {
         } yield assert(contains)(isFalse)
       }
     },
+    testM("invalidateAll") {
+      checkM(Gen.anyInt) { salt =>
+        for {
+          cache <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
+          _     <- ZIO.foreach(1 to 100)(cache.get)
+          _     <- cache.invalidateAll
+          size  <- cache.size
+        } yield assert(size)(equalTo(0))
+      }
+    },
     suite("lookup")(
       testM("sequential") {
         checkM(Gen.anyInt) { salt =>
