@@ -171,7 +171,7 @@ object Cache {
               var promise: Promise[Error, Value] = null
               var value                          = map.get(k)
               if (value eq null) {
-                promise = Promise.unsafeMake[Error, Value](fiberId)
+                promise = newPromise()
                 key = new MapKey(k)
                 value = map.putIfAbsent(k, MapValue.Pending(key, promise))
               }
@@ -188,8 +188,7 @@ object Cache {
                   case MapValue.Complete(key, exit, _, timeToLive) =>
                     trackAccess(key)
                     trackHit()
-                    val now = Instant.now()
-                    if (now.isAfter(timeToLive)) {
+                    if (hasExpired(timeToLive)) {
                       map.remove(k, value)
                       get(k)
                     } else {
@@ -201,8 +200,7 @@ object Cache {
                       ) =>
                     trackAccess(mapKey)
                     trackHit()
-                    val now = Instant.now()
-                    if (now.isAfter(ttl)) {
+                    if (hasExpired(ttl)) {
                       promiseInProgress.await
                     } else {
                       ZIO.done(currentResult)
@@ -217,7 +215,7 @@ object Cache {
               var promise: Promise[Error, Value] = null
               var value                          = map.get(k)
               if (value eq null) {
-                promise = Promise.unsafeMake[Error, Value](fiberId)
+                promise = newPromise()
                 key = new MapKey(k)
                 value = map.putIfAbsent(k, MapValue.Pending(key, promise))
               }
@@ -228,12 +226,11 @@ object Cache {
                   case MapValue.Pending(_, promiseInProgress)                             =>
                     promiseInProgress.await
                   case completedResult @ MapValue.Complete(mapKey, currentResult, _, ttl) =>
-                    val now = Instant.now()
-                    if (now.isAfter(ttl)) {
+                    if (hasExpired(ttl)) {
                       map.remove(k, value)
                       get(k)
                     } else {
-                      val refreshPromise    = Promise.unsafeMake[Error, Value](fiberId)
+                      val refreshPromise    = newPromise()
                       val refreshInProgress = MapValue.Refreshing(refreshPromise, completedResult)
 
                       if (map.replace(k, completedResult, refreshInProgress)) {
@@ -256,12 +253,12 @@ object Cache {
               ()
             }
 
-          def invalidateAll: UIO[Unit] =
+          override def invalidateAll: UIO[Unit] =
             ZIO.succeed {
               map.clear()
             }
 
-          def size: UIO[Int] =
+          override def size: UIO[Int] =
             ZIO.succeed(map.size)
 
           private def lookupValueOf(key: Key, promise: Promise[Error, Value]) =
@@ -284,6 +281,12 @@ object Cache {
               .onInterrupt(
                 promise.interrupt.as(map.remove(key))
               )
+
+          private def newPromise() =
+            Promise.unsafeMake[Error, Value](fiberId)
+
+          private def hasExpired(timeToLive: Instant) =
+            Instant.now().isAfter(timeToLive)
         }
       }
     }
@@ -301,7 +304,7 @@ object Cache {
    * lookup function, when it is available, or `Complete` with an `Exit` value
    * that contains the result of computing the lookup function.
    */
-  private sealed trait MapValue[Key, Error, Value]
+  private sealed trait MapValue[Key, Error, Value] extends Product with Serializable
 
   private object MapValue {
     final case class Pending[Key, Error, Value](
