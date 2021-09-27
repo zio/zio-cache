@@ -41,8 +41,7 @@ val zioVersion = "1.0.12"
 lazy val root = project
   .in(file("."))
   .settings(
-    publish / skip := true,
-    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
+    publish / skip := true
   )
   .aggregate(
     zioCacheJVM,

@@ -37,10 +37,10 @@ object CacheSpec extends DefaultRunnableSpec {
       checkM(Gen.anyInt) { salt =>
         for {
           cache <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
-          _     <- ZIO.foreach(1 to 100)(cache.get)
+          _     <- ZIO.foreach_(1 to 100)(cache.get)
           _     <- cache.invalidateAll
           size  <- cache.size
-        } yield assert(size)(equalTo(0))
+        } yield assertTrue(size == 0)
       }
     },
     suite("lookup")(
@@ -75,20 +75,18 @@ object CacheSpec extends DefaultRunnableSpec {
     suite("refresh")(
       testM("should update the cache with a new value") {
         var modifier = 1
-        def retrieve(x: Int) = {
+        def retrieve(key: Int) = {
           modifier = modifier * 10
-          ZIO.succeed(x * modifier)
+          ZIO.succeed(key * modifier)
         }
         val key      = 123
         for {
           cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve))
           val1  <- cache.get(key)
           _     <- cache.refresh(key)
+          _     <- cache.get(key)
           val2  <- cache.get(key)
-          val3  <- cache.get(key)
-        } yield assertTrue(val1 == key * 10) &&
-          assertTrue(val2 == key * 10 * 10) &&
-          assertTrue(val2 == val3)
+        } yield assertTrue(val1 == key * 10) && assertTrue(val2 == val1 * 10)
       }
     ),
     testM("size") {
