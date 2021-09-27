@@ -129,8 +129,8 @@ object Cache {
 
         new Cache[Key, Error, Value] {
 
-          override def cacheStats: UIO[CacheStats] =
-            ZIO.succeed(CacheStats(hits.longValue, misses.longValue))
+          def cacheStats: UIO[CacheStats] =
+            ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
           override def contains(k: Key): UIO[Boolean] =
             ZIO.succeed(map.containsKey(k))
