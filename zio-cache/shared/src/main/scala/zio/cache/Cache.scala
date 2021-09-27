@@ -44,8 +44,8 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   def get(key: Key): IO[Error, Value]
 
   /**
-   * Computes the value associated with the specified key, with the lookup function, puts it in the cache, and returns
-   * it. The difference between this and `get` method is that `refresh` triggers (re)computation of the value without
+   * Computes the value associated with the specified key, with the lookup function, and puts it in the cache. The
+   * difference between this and `get` method is that `refresh` triggers (re)computation of the value without
    * invalidating it in the cache, so any request to the associated key can still be served while the value is being
    * re-computed/retrieved by the lookup function.
    */
@@ -225,7 +225,7 @@ object Cache {
           override def size: UIO[Int] =
             ZIO.succeed(map.size)
 
-          private def lookupValueOf(key: Key, promise: Promise[Error, Value]) =
+          private def lookupValueOf(key: Key, promise: Promise[Error, Value]): IO[Error, Value] =
             lookup(key)
               .provide(environment)
               .run
