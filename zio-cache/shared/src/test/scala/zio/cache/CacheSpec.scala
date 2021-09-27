@@ -15,12 +15,12 @@ object CacheSpec extends DefaultRunnableSpec {
       checkM(Gen.anyInt) { salt =>
         for {
           cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
-          _          <- ZIO.foreachPar((1 to 100).map(_ / 2))(cache.get)
+          _          <- ZIO.foreachPar_((1 to 100).map(_ / 2))(cache.get)
           cacheStats <- cache.cacheStats
           hits        = cacheStats.hits
           misses      = cacheStats.misses
-        } yield assert(hits)(equalTo(49L)) &&
-          assert(misses)(equalTo(51L))
+        } yield assertTrue(hits == 49L) &&
+          assertTrue(misses == 51L)
       }
     },
     testM("invalidate") {
@@ -72,7 +72,7 @@ object CacheSpec extends DefaultRunnableSpec {
         }
       }
     ),
-    suite("refresh")(
+    suite("`refresh` method")(
       testM("should update the cache with a new value") {
         var modifier = 1
         def retrieve(key: Int) = {
@@ -87,6 +87,17 @@ object CacheSpec extends DefaultRunnableSpec {
           _     <- cache.get(key)
           val2  <- cache.get(key)
         } yield assertTrue(val1 == key * 10) && assertTrue(val2 == val1 * 10)
+      },
+      testM("should get the value if the key doesn't exist in the cache") {
+        checkM(Gen.anyInt) { salt =>
+          val cap = 100
+          for {
+            cache  <- Cache.make(cap, Duration.Infinity, Lookup(hash(salt)))
+            count0 <- cache.size
+            _      <- ZIO.foreach_(1 to cap)(cache.refresh)
+            count1 <- cache.size
+          } yield assertTrue(count0 == 0) && assertTrue(count1 == cap)
+        }
       }
     ),
     testM("size") {

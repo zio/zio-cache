@@ -1,7 +1,7 @@
 package zio.cache
 
 import zio.internal.MutableConcurrentQueue
-import zio.{Exit, IO, Promise, UIO, URIO, ZIO}
+import zio.{Exit, IO, Promise, Ref, UIO, URIO, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
@@ -49,7 +49,7 @@ sealed abstract class Cache[-Key, +Error, +Value] {
    * invalidating it in the cache, so any request to the associated key can still be served while the value is being
    * re-computed/retrieved by the lookup function.
    */
-  def refresh(k: Key): IO[Error, Value]
+  def refresh(k: Key): IO[Error, Unit]
 
   /**
    * Invalidates the value associated with the specified key.
@@ -129,7 +129,7 @@ object Cache {
 
         new Cache[Key, Error, Value] {
 
-          def cacheStats: UIO[CacheStats] =
+          override def cacheStats: UIO[CacheStats] =
             ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
           override def contains(k: Key): UIO[Boolean] =
@@ -195,42 +195,20 @@ object Cache {
               }
             }
 
-          override def refresh(k: Key): IO[Error, Value] =
+          override def refresh(k: Key): IO[Error, Unit] =
             ZIO.effectSuspendTotal {
-              var key: MapKey[Key]               = null
-              var promise: Promise[Error, Value] = null
-              var value                          = map.get(k)
-              if (value eq null) {
+              for {
+                ref    <- Ref.make(map.get(k))
+                ver1   <- ref.get
                 promise = newPromise()
-                key = new MapKey(k)
-                value = map.putIfAbsent(k, MapValue.Pending(key, promise))
-              }
-              if (value eq null) {
-                lookupValueOf(k, promise)
-              } else {
-                value match {
-                  case MapValue.Pending(_, promiseInProgress)                             =>
-                    promiseInProgress.await
-                  case completedResult @ MapValue.Complete(mapKey, currentResult, _, ttl) =>
-                    if (hasExpired(ttl)) {
-                      map.remove(k, value)
-                      get(k)
-                    } else {
-                      val refreshPromise    = newPromise()
-                      val refreshInProgress = MapValue.Refreshing(refreshPromise, completedResult)
-
-                      ZIO.when(
-                        map.replace(k, completedResult, refreshInProgress)
-                      ) {
-                        // Only trigger the lookup if we're still the current value, `completedResult`
-                        lookupValueOf(mapKey.value, refreshPromise).fork
-                      } *>
-                        ZIO.done(currentResult)
-                    }
-                  case MapValue.Refreshing(promiseInProgress, _)                          =>
-                    promiseInProgress.await
-                }
-              }
+                _      <- ZIO.when(ver1 eq null) {
+                            ref.set(
+                              map.putIfAbsent(k, MapValue.Pending(new MapKey(k), promise))
+                            )
+                          }
+                ver2   <- ref.get
+                _      <- refreshValueOf(k, ver2, promise)
+              } yield ()
             }
 
           override def invalidate(k: Key): UIO[Unit] =
@@ -267,6 +245,38 @@ object Cache {
               .onInterrupt(
                 promise.interrupt.as(map.remove(key))
               )
+
+          private def refreshValueOf(
+            key: Key,
+            currentValue: MapValue[Key, Error, Value],
+            promise: Promise[Error, Value]
+          ) =
+            if (currentValue eq null) {
+              lookupValueOf(key, promise)
+            } else {
+              currentValue match {
+                case MapValue.Pending(_, promiseInProgress)                             =>
+                  promiseInProgress.await
+                case completedResult @ MapValue.Complete(mapKey, currentResult, _, ttl) =>
+                  if (hasExpired(ttl)) {
+                    map.remove(key, currentValue)
+                    get(key)
+                  } else {
+                    val refreshPromise    = newPromise()
+                    val refreshInProgress = MapValue.Refreshing(refreshPromise, completedResult)
+
+                    ZIO.when(
+                      map.replace(key, completedResult, refreshInProgress)
+                    ) {
+                      // Only trigger the lookup if we're still the current value, `completedResult`
+                      lookupValueOf(mapKey.value, refreshPromise)
+                    } *>
+                      ZIO.done(currentResult)
+                  }
+                case MapValue.Refreshing(promiseInProgress, _)                          =>
+                  promiseInProgress.await
+              }
+            }
 
           private def newPromise() =
             Promise.unsafeMake[Error, Value](fiberId)
