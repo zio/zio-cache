@@ -136,7 +136,7 @@ object Cache {
         new Cache[Key, Error, Value] {
 
           def cacheStats: UIO[CacheStats] =
-            ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size, capacity))
+            ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
           def contains(k: Key): UIO[Boolean] =
             ZIO.succeed(map.containsKey(k))
