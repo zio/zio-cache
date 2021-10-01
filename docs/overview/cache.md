@@ -70,7 +70,7 @@ trait Cache[-Key, +Error, +Value] {
   def size: UIO[Int]
 }
 ```
-The `refresh` operator is similar to `get`. The difference is `refresh` triggers a re-computation of the value without invalidating it. This allows any request to the associated key to be served while the value is being re-computed / retrieved by the lookup function. Some use cases are fetching the latest value (e.g. a price change from a backend database or a new score from an updated ML model), extending the entry's TTL, or both.
+The `refresh` operator is similar to `get`. The difference is `refresh` triggers a re-computation of the value without invalidating it. This allows any request to the associated key to be served while the value is being re-computed / retrieved by the lookup function. Note: `refresh` always triggers the lookup function, disregarding the last `Error`. 
 
 The `size` operator returns the current size of the cache. Under concurrent access the size should be regarded as only approximate since by the time we observe a given size the cache may have a different size based on concurrent insertions or removals.
 

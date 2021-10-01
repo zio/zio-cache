@@ -13,7 +13,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
  * value of type `Value`. Getting a value from the cache will either return
  * the previous result of the lookup function if it is available or else
  * compute a new result with the lookup function, put it in the cache, and
- * return it..
+ * return it.
  *
  * A cache also has a specified capacity and time to live. When the cache is
  * at capacity the least recently accessed values in the cache will be
