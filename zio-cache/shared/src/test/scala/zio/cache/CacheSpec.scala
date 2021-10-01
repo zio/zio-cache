@@ -74,17 +74,18 @@ object CacheSpec extends DefaultRunnableSpec {
     ),
     suite("`refresh` method")(
       testM("should update the cache with a new value") {
-        var modifier = 1
-        def retrieve(key: Int) = {
-          modifier = modifier * 10
-          ZIO.succeed(key * modifier)
-        }
-        val key      = 123
+        def retrieve(modifier: Ref[Int])(key: Int) =
+          modifier
+            .updateAndGet(_ * 10)
+            .map(key * _)
+
+        val seed = 1
+        val key  = 123
         for {
-          cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve))
+          ref   <- Ref.make(seed)
+          cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)))
           val1  <- cache.get(key)
           _     <- cache.refresh(key)
-          _     <- cache.get(key)
           val2  <- cache.get(key)
         } yield assertTrue(val1 == key * 10) && assertTrue(val2 == val1 * 10)
       },

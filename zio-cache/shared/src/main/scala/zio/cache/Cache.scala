@@ -1,24 +1,29 @@
 package zio.cache
 
 import zio.internal.MutableConcurrentQueue
-import zio.{Exit, IO, Promise, Ref, UIO, URIO, ZIO}
+import zio.{Exit, IO, Promise, UIO, URIO, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
 import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
 
 /**
- * A `Cache` is defined in terms of a lookup function that, given a key of type `Key`, can either fail with an error of
- * type `Error` or succeed with a value of type `Value`. Getting a value from the cache will either return the previous
- * result of the lookup function if it is available or else compute a new result with the lookup function, put it in the
- * cache, and return it.
+ * A `Cache` is defined in terms of a lookup function that, given a key of
+ * type `Key`, can either fail with an error of type `Error` or succeed with a
+ * value of type `Value`. Getting a value from the cache will either return
+ * the previous result of the lookup function if it is available or else
+ * compute a new result with the lookup function, put it in the cache, and
+ * return it..
  *
- * A cache also has a specified capacity and time to live. When the cache is at capacity the least recently accessed
- * values in the cache will be removed to make room for new values. Getting a value with a life older than the specified
- * time to live will result in a new value being computed with the lookup function and returned when available.
+ * A cache also has a specified capacity and time to live. When the cache is
+ * at capacity the least recently accessed values in the cache will be
+ * removed to make room for new values. Getting a value with a life older than
+ * the specified time to live will result in a new value being computed with
+ * the lookup function and returned when available.
  *
- * The cache is safe for concurrent access. If multiple fibers attempt to get the same key the lookup function will only
- * be computed once and the result will be returned to all fibers.
+ * The cache is safe for concurrent access. If multiple fibers attempt to get
+ * the same key the lookup function will only be computed once and the result
+ * will be returned to all fibers.
  */
 sealed abstract class Cache[-Key, +Error, +Value] {
 
@@ -28,7 +33,8 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   def cacheStats: UIO[CacheStats]
 
   /**
-   * Returns whether a value associated with the specified key exists in the cache.
+   * Returns whether a value associated with the specified key exists in the
+   * cache.
    */
   def contains(key: Key): UIO[Boolean]
 
@@ -38,16 +44,20 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   def entryStats(key: Key): UIO[Option[EntryStats]]
 
   /**
-   * Retrieves the value associated with the specified key if it exists. Otherwise computes the value with the lookup
-   * function, puts it in the cache, and returns it.
+   * Retrieves the value associated with the specified key if it exists.
+   * Otherwise computes the value with the lookup function, puts it in the
+   * cache, and returns it.
    */
   def get(key: Key): IO[Error, Value]
 
   /**
-   * Computes the value associated with the specified key, with the lookup function, and puts it in the cache. The
-   * difference between this and `get` method is that `refresh` triggers (re)computation of the value without
-   * invalidating it in the cache, so any request to the associated key can still be served while the value is being
-   * re-computed/retrieved by the lookup function.
+   * Computes the value associated with the specified key, with the lookup
+   * function, and puts it in the cache. The difference between this and
+   * `get` method is that `refresh` triggers (re)computation of the value
+   * without invalidating it in the cache, so any request to the associated
+   * key can still be served while the value is being re-computed/retrieved
+   * by the lookup function. Additionally, `refresh` always triggers the
+   * lookup function, disregarding the last `Error`.
    */
   def refresh(k: Key): IO[Error, Unit]
 
@@ -70,7 +80,8 @@ sealed abstract class Cache[-Key, +Error, +Value] {
 object Cache {
 
   /**
-   * Constructs a new cache with the specified capacity, time to live, and lookup function.
+   * Constructs a new cache with the specified capacity, time to live, and
+   * lookup function.
    */
   def make[Key, Environment, Error, Value](
     capacity: Int,
@@ -80,8 +91,9 @@ object Cache {
     makeWith(capacity, lookup)(_ => timeToLive)
 
   /**
-   * Constructs a new cache with the specified capacity, time to live, and lookup function, where the time to live can
-   * depend on the `Exit` value returned by the lookup function.
+   * Constructs a new cache with the specified capacity, time to live, and
+   * lookup function, where the time to live can depend on the `Exit` value
+   * returned by the lookup function.
    */
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
@@ -141,9 +153,9 @@ object Cache {
               if (value eq null) None
               else {
                 value match {
-                  case MapValue.Pending(_, _)                                         =>
+                  case MapValue.Pending(_, _) =>
                     None
-                  case MapValue.Complete(_, _, entryState, _)                         =>
+                  case MapValue.Complete(_, _, entryState, _) =>
                     Option(EntryStats(entryState.loaded))
                   case MapValue.Refreshing(_, MapValue.Complete(_, _, entryState, _)) =>
                     Option(EntryStats(entryState.loaded))
@@ -167,7 +179,7 @@ object Cache {
                 lookupValueOf(k, promise)
               } else {
                 value match {
-                  case MapValue.Pending(key, promise)              =>
+                  case MapValue.Pending(key, promise) =>
                     trackAccess(key)
                     trackHit()
                     promise.await
@@ -197,18 +209,34 @@ object Cache {
 
           override def refresh(k: Key): IO[Error, Unit] =
             ZIO.effectSuspendTotal {
-              for {
-                ref    <- Ref.make(map.get(k))
-                ver1   <- ref.get
-                promise = newPromise()
-                _      <- ZIO.when(ver1 eq null) {
-                            ref.set(
-                              map.putIfAbsent(k, MapValue.Pending(new MapKey(k), promise))
-                            )
-                          }
-                ver2   <- ref.get
-                _      <- refreshValueOf(k, ver2, promise)
-              } yield ()
+              val promise = newPromise()
+              var value   = map.get(k)
+              if (value eq null) {
+                value = map.putIfAbsent(k, MapValue.Pending(new MapKey(k), promise))
+              }
+              val result = if (value eq null) {
+                lookupValueOf(k, promise)
+              } else {
+                value match {
+                  case MapValue.Pending(_, promiseInProgress) =>
+                    promiseInProgress.await
+                  case completedResult @ MapValue.Complete(mapKey, _, _, ttl) =>
+                    if (hasExpired(ttl)) {
+                      map.remove(k, value)
+                      get(k)
+                    } else {
+                      // Only trigger the lookup if we're still the current value, `completedResult`
+                      ZIO.when(
+                        map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
+                      ) {
+                        lookupValueOf(mapKey.value, promise)
+                      }
+                    }
+                  case MapValue.Refreshing(promiseInProgress, _) =>
+                    promiseInProgress.await
+                }
+              }
+              result.unit
             }
 
           override def invalidate(k: Key): UIO[Unit] =
@@ -230,7 +258,7 @@ object Cache {
               .provide(environment)
               .run
               .flatMap { lookupResult =>
-                val now             = Instant.now()
+                val now = Instant.now()
                 val completedResult = MapValue.Complete(
                   new MapKey(key),
                   lookupResult,
@@ -246,38 +274,6 @@ object Cache {
                 promise.interrupt.as(map.remove(key))
               )
 
-          private def refreshValueOf(
-            key: Key,
-            currentValue: MapValue[Key, Error, Value],
-            promise: Promise[Error, Value]
-          ) =
-            if (currentValue eq null) {
-              lookupValueOf(key, promise)
-            } else {
-              currentValue match {
-                case MapValue.Pending(_, promiseInProgress)                             =>
-                  promiseInProgress.await
-                case completedResult @ MapValue.Complete(mapKey, currentResult, _, ttl) =>
-                  if (hasExpired(ttl)) {
-                    map.remove(key, currentValue)
-                    get(key)
-                  } else {
-                    val refreshPromise    = newPromise()
-                    val refreshInProgress = MapValue.Refreshing(refreshPromise, completedResult)
-
-                    ZIO.when(
-                      map.replace(key, completedResult, refreshInProgress)
-                    ) {
-                      // Only trigger the lookup if we're still the current value, `completedResult`
-                      lookupValueOf(mapKey.value, refreshPromise)
-                    } *>
-                      ZIO.done(currentResult)
-                  }
-                case MapValue.Refreshing(promiseInProgress, _)                          =>
-                  promiseInProgress.await
-              }
-            }
-
           private def newPromise() =
             Promise.unsafeMake[Error, Value](fiberId)
 
@@ -288,15 +284,21 @@ object Cache {
     }
 
   /**
-   * A `MapKey` represents a key in the cache. It contains mutable references to the previous key and next key in the
-   * `KeySet` to support an efficient implementation of a sorted set of keys.
+   * A `MapKey` represents a key in the cache. It contains mutable references
+   * to the previous key and next key in the `KeySet` to support an efficient
+   * implementation of a sorted set of keys.
    */
-  private final class MapKey[Key](val value: Key, var previous: MapKey[Key] = null, var next: MapKey[Key] = null)
+  private final class MapKey[Key](
+    val value: Key,
+    var previous: MapKey[Key] = null,
+    var next: MapKey[Key] = null
+  )
 
   /**
-   * A `MapValue` represents a value in the cache. A value may either be `Pending` with a `Promise` that will contain
-   * the result of computing the lookup function, when it is available, or `Complete` with an `Exit` value that contains
-   * the result of computing the lookup function.
+   * A `MapValue` represents a value in the cache. A value may either be
+   * `Pending` with a `Promise` that will contain the result of computing the
+   * lookup function, when it is available, or `Complete` with an `Exit` value
+   * that contains the result of computing the lookup function.
    */
   private sealed trait MapValue[Key, Error, Value] extends Product with Serializable
 
@@ -348,8 +350,9 @@ object Cache {
   }
 
   /**
-   * A `KeySet` is a sorted set of keys in the cache ordered by last access. For efficiency, the set is implemented in
-   * terms of a doubly linked list and is not safe for concurrent access.
+   * A `KeySet` is a sorted set of keys in the cache ordered by last access.
+   * For efficiency, the set is implemented in terms of a doubly linked list
+   * and is not safe for concurrent access.
    */
   private final class KeySet[Key] {
     private[this] var head: MapKey[Key] = null
