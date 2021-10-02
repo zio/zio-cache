@@ -74,9 +74,10 @@ object CacheSpec extends DefaultRunnableSpec {
     ),
     suite("`refresh` method")(
       testM("should update the cache with a new value") {
-        def retrieve(modifier: Ref[Int])(key: Int) =
-          modifier
-            .updateAndGet(_ * 10)
+        def inc(n: Int) = n * 10
+        def retrieve(multiplier: Ref[Int])(key: Int) =
+          multiplier
+            .updateAndGet(inc)
             .map(key * _)
 
         val seed = 1
@@ -86,8 +87,41 @@ object CacheSpec extends DefaultRunnableSpec {
           cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)))
           val1  <- cache.get(key)
           _     <- cache.refresh(key)
+          _     <- cache.get(key)
           val2  <- cache.get(key)
-        } yield assertTrue(val1 == key * 10) && assertTrue(val2 == val1 * 10)
+        } yield assertTrue(val1 == inc(key)) && assertTrue(val2 == inc(val1))
+      },
+      testM("should update the cache with a new value even if the last `get` or `refresh` failed") {
+
+        val error = new RuntimeException("Must be a multiple of 3")
+
+        def inc(n: Int) = n + 1
+        def retrieve(number: Ref[Int])(key: Int) =
+          number
+            .updateAndGet(inc)
+            .flatMap {
+              case n if n % 3 == 0 =>
+                ZIO.fail(error)
+              case n =>
+                ZIO.succeed(key * n)
+            }
+
+        val seed = 2
+        val key  = 1
+        for {
+          ref      <- Ref.make(seed)
+          cache    <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)))
+          failure1 <- cache.get(key).either
+          _        <- cache.refresh(key)
+          val1     <- cache.get(key).either
+          _        <- cache.refresh(key)
+          failure2 <- cache.refresh(key).either
+          _        <- cache.refresh(key)
+          val2     <- cache.get(key).either
+        } yield assert(failure1)(isLeft(equalTo(error))) &&
+          assert(failure2)(isLeft(equalTo(error))) &&
+          assert(val1)(isRight(equalTo(4))) &&
+          assert(val2)(isRight(equalTo(7)))
       },
       testM("should get the value if the key doesn't exist in the cache") {
         checkM(Gen.anyInt) { salt =>
