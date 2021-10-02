@@ -22,6 +22,7 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("fix", "; all compile:scalafix test:scalafix; all scalafmtSbt scalafmtAll")
 addCommandAlias("check", "; scalafmtSbtCheck; scalafmtCheckAll; compile:scalafix --check; test:scalafix --check")
+addCommandAlias("benchmark", "benchmarks/Jmh/run")
 
 addCommandAlias(
   "testJVM",
@@ -41,7 +42,8 @@ val zioVersion = "1.0.12"
 lazy val root = project
   .in(file("."))
   .settings(
-    publish / skip := true
+    publish / skip := true,
+    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
   )
   .aggregate(
     zioCacheJVM,
