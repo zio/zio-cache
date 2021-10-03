@@ -59,7 +59,7 @@ sealed abstract class Cache[-Key, +Error, +Value] {
    * by the lookup function. Additionally, `refresh` always triggers the
    * lookup function, disregarding the last `Error`.
    */
-  def refresh(k: Key): IO[Error, Unit]
+  def refresh(key: Key): IO[Error, Unit]
 
   /**
    * Invalidates the value associated with the specified key.
@@ -226,10 +226,8 @@ object Cache {
                       get(k)
                     } else {
                       // Only trigger the lookup if we're still the current value, `completedResult`
-                      ZIO.when(
+                      lookupValueOf(mapKey.value, promise).when {
                         map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
-                      ) {
-                        lookupValueOf(mapKey.value, promise)
                       }
                     }
                   case MapValue.Refreshing(promiseInProgress, _) =>
