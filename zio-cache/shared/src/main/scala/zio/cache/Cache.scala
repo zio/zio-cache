@@ -146,7 +146,7 @@ object Cache {
           override def add(key: Key, value: Value): Task[Boolean] =
             ZIO.effect {
               val v = completeNowWith(key, Exit.Success(value))
-              map.putIfAbsent(key, v) == null
+              map.putIfAbsent(key, v) eq null
             }
 
           override def cacheStats: UIO[CacheStats] =
