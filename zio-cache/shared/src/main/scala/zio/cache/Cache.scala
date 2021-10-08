@@ -1,7 +1,7 @@
 package zio.cache
 
 import zio.internal.MutableConcurrentQueue
-import zio.{Exit, IO, Promise, UIO, URIO, ZIO}
+import zio.{Exit, IO, Promise, Task, UIO, URIO, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
@@ -25,7 +25,9 @@ import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
  * the same key the lookup function will only be computed once and the result
  * will be returned to all fibers.
  */
-sealed abstract class Cache[-Key, +Error, +Value] {
+sealed abstract class Cache[-Key, +Error, Value] {
+
+  def add(key: Key, value: Value): Task[Boolean]
 
   /**
    * Returns statistics for this cache.
@@ -141,6 +143,12 @@ object Cache {
 
         new Cache[Key, Error, Value] {
 
+          override def add(key: Key, value: Value): Task[Boolean] =
+            ZIO.effect {
+              val v = completeNowWith(key, Exit.Success(value))
+              map.putIfAbsent(key, v) == null
+            }
+
           override def cacheStats: UIO[CacheStats] =
             ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
@@ -251,20 +259,24 @@ object Cache {
           override def size: UIO[Int] =
             ZIO.succeed(map.size)
 
+          private def completeNowWith(key: Key, result: Exit[Error, Value]) = {
+            val now = Instant.now()
+
+            MapValue.Complete(
+              new MapKey(key),
+              result,
+              EntryStats(now),
+              now.plus(timeToLive(result))
+            )
+          }
+
           private def lookupValueOf(key: Key, promise: Promise[Error, Value]): IO[Error, Value] =
             lookup(key)
               .provide(environment)
               .run
               .flatMap { lookupResult =>
-                val now = Instant.now()
-                val completedResult = MapValue.Complete(
-                  new MapKey(key),
-                  lookupResult,
-                  EntryStats(now),
-                  now.plus(timeToLive(lookupResult))
-                )
+                map.put(key, completeNowWith(key, lookupResult))
 
-                map.put(key, completedResult)
                 promise.done(lookupResult) *>
                   ZIO.done(lookupResult)
               }
