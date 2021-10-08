@@ -139,7 +139,7 @@ Once you are done, you can commit again:
 git commit -am "merged upstream changes"
 ```
 
-At this point, you should re-run all tests to make sure everything is passing:
+Before you push your commit, you should re-run all tests to make sure everything is passing:
 
 ```bash
 # If you are already in a SBT session you can type only 'test'
@@ -153,6 +153,15 @@ If all the tests are passing, then you can format your code:
 # If you are already in a SBT session you can type only 'fmt'
 
 sbt fmt
+```
+
+If you have implemented a new feature or made significant changes, you should also run benchmark suites in your branch as well as in the main branch (trunk). Compare the results of the two benchmarking runs and make sure the performance in your branch is comparable to that of the trunk; otherwise, you should revisit your implementation and/or discuss this with project maintainers.
+
+To run the benchmark suites in the target branch:
+```bash
+# If you are already in a SBT session you can type only 'benchmark'
+
+sbt benchmark
 ```
 
 If your changes altered an API, then you may need to rebuild the microsite to make sure none of the (compiled) documentation breaks:

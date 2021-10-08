@@ -44,7 +44,7 @@ A cache is constructed with a specified capacity. When the cache is at capacity 
 
 Note that the size of the cache may slightly exceed the specified capacity between operations.
 
-## Time To Live
+## Time To Live (TTL)
 
 A cache also allows specifying a time to live. The cache guarantees that no value will be returned from the cache if its age is greater than or equal to the specified time to live.
 
@@ -64,12 +64,18 @@ trait Cache[-Key, +Error, +Value] {
   def cacheStats: UIO[CacheStats]
   def contains(key: Key): UIO[Boolean]
   def entryStats(key: Key): UIO[Option[EntryStats]]
+  def invalidate(key: Key): UIO[Unit]
+  def invalidateAll: UIO[Unit]
+  def refresh(key: Key): IO[Error, Unit]
   def size: UIO[Int]
 }
 ```
+The `refresh` operator is similar to `get`. The difference is `refresh` triggers a re-computation of the value without invalidating it. This allows any request to the associated key to be served while the value is being re-computed / retrieved by the lookup function. Note: `refresh` always triggers the lookup function, disregarding the last `Error`. 
 
 The `size` operator returns the current size of the cache. Under concurrent access the size should be regarded as only approximate since by the time we observe a given size the cache may have a different size based on concurrent insertions or removals.
 
 Similarly, the `contains` operator returns whether a value associated with the specified key exists in the cache. Again, under concurrent access `contains` is guaranteed to return whether the cache contains a value associated with the specified key as of a given point in time but that value may be concurrently added or removed immediately after that.
 
 There are also the `cacheStats` and `entryStats` operators which allow obtaining a snapshot of statistics either for the cache itself or for a specified entry. See the sections on cache statistics and entry statistics for further discussion of this functionality.
+
+The `invalidate` and `invalidateAll` operators can be used to evict a value associated with a specified key and evict all values, respectively.
