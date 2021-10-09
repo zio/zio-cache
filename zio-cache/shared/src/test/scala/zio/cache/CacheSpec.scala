@@ -2,8 +2,8 @@ package zio.cache
 
 import zio._
 import zio.duration._
-import zio.test._
 import zio.test.Assertion._
+import zio.test._
 import zio.test.environment.TestClock.adjust
 
 object CacheSpec extends DefaultRunnableSpec {

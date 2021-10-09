@@ -1,8 +1,8 @@
 package zio.cache
 
 import zio.internal.MutableConcurrentQueue
-import zio.{Chunk, Exit, Hub, IO, Promise, UIO, URIO, ZIO}
 import zio.stream.{UStream, ZStream}
+import zio.{Chunk, Exit, Hub, IO, Promise, UIO, URIO, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
