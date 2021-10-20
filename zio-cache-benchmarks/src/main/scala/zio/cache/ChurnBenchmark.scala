@@ -11,8 +11,9 @@ import java.util.concurrent.TimeUnit
 @Measurement(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Warmup(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Fork(1)
-class ChurnBenchmark extends BootstrapRuntime {
-  override val platform: zio.internal.Platform = zio.internal.Platform.benchmark
+class ChurnBenchmark extends zio.Runtime[ZEnv] {
+  override def environment: ZEnv            = ZEnv.Services.live
+  override def runtimeConfig: RuntimeConfig = RuntimeConfig.benchmark
 
   @Param(Array("10000"))
   var size: Int = _
@@ -42,4 +43,5 @@ class ChurnBenchmark extends BootstrapRuntime {
         _ <- ZIO.foreachDiscard(newEntries)(cache.get(_))
       } yield ()
     )
+
 }
