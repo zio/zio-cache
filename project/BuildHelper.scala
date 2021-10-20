@@ -23,7 +23,7 @@ object BuildHelper {
   val Scala211: String   = versions("2.11")
   val Scala212: String   = versions("2.12")
   val Scala213: String   = versions("2.13")
-  val ScalaDotty: String = versions("3.0")
+  val ScalaDotty: String = versions("3.1")
 
   val SilencerVersion = "1.7.5"
 
@@ -256,7 +256,13 @@ object BuildHelper {
     Test / parallelExecution := true,
     incOptions ~= (_.withLogRecompileOnMacro(false)),
     autoAPIMappings := true,
-    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
+    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library"),
+    scalacOptions ++= {
+      if (scalaVersion.value == ScalaDotty)
+        Seq.empty
+      else
+        Seq("-P:silencer:globalFilters=[zio.stacktracer.TracingImplicits.disableAutoTrace]")
+    }
   )
 
   def macroExpansionSettings = Seq(

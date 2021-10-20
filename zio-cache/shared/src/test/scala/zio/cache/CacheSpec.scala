@@ -11,7 +11,7 @@ object CacheSpec extends DefaultRunnableSpec {
 
   def spec: ZSpec[Environment, Failure] = suite("CacheSpec")(
     test("cacheStats") {
-      checkM(Gen.anyInt) { salt =>
+      check(Gen.int) { salt =>
         for {
           cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
           _          <- ZIO.foreachPar((1 to 100).map(_ / 2))(cache.get)
@@ -23,7 +23,7 @@ object CacheSpec extends DefaultRunnableSpec {
       }
     },
     test("invalidate") {
-      checkM(Gen.anyInt) { salt =>
+      check(Gen.int) { salt =>
         for {
           cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
           _        <- ZIO.foreach(1 to 100)(cache.get)
@@ -34,7 +34,7 @@ object CacheSpec extends DefaultRunnableSpec {
     },
     suite("lookup")(
       test("sequential") {
-        checkM(Gen.anyInt) { salt =>
+        check(Gen.int) { salt =>
           for {
             cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
             actual   <- ZIO.foreach(1 to 100)(cache.get)
@@ -43,7 +43,7 @@ object CacheSpec extends DefaultRunnableSpec {
         }
       },
       test("concurrent") {
-        checkM(Gen.anyInt) { salt =>
+        check(Gen.int) { salt =>
           for {
             cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
             actual   <- ZIO.foreachPar(1 to 100)(cache.get)
@@ -52,7 +52,7 @@ object CacheSpec extends DefaultRunnableSpec {
         }
       },
       test("capacity") {
-        checkM(Gen.anyInt) { salt =>
+        check(Gen.int) { salt =>
           for {
             cache    <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
             actual   <- ZIO.foreachPar(1 to 100)(cache.get)
@@ -62,7 +62,7 @@ object CacheSpec extends DefaultRunnableSpec {
       }
     ),
     test("size") {
-      checkM(Gen.anyInt) { salt =>
+      check(Gen.int) { salt =>
         for {
           cache <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
           _     <- ZIO.foreach((1 to 100))(cache.get)
