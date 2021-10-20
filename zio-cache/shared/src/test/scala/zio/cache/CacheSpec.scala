@@ -2,7 +2,7 @@ package zio.cache
 
 import zio._
 import zio.test.Assertion._
-import zio.test.{Gen, _}
+import zio.test._
 
 object CacheSpec extends DefaultRunnableSpec {
 
