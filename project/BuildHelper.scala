@@ -256,7 +256,13 @@ object BuildHelper {
     Test / parallelExecution := true,
     incOptions ~= (_.withLogRecompileOnMacro(false)),
     autoAPIMappings := true,
-    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
+    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library"),
+    scalacOptions ++= {
+      if (scalaVersion.value == ScalaDotty)
+        Seq.empty
+      else
+        Seq("-P:silencer:globalFilters=[zio.stacktracer.TracingImplicits.disableAutoTrace]")
+    }
   )
 
   def macroExpansionSettings = Seq(
