@@ -165,7 +165,7 @@ object Cache {
                 trackAccess(key)
                 trackMiss()
                 lookup(k)
-                  .provide(environment)
+                  .provideEnvironment(environment)
                   .exit
                   .flatMap { exit =>
                     val now        = Instant.now()

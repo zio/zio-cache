@@ -12,8 +12,8 @@ import java.util.concurrent.TimeUnit
 @Warmup(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Fork(1)
 class FillBenchmark extends zio.Runtime[ZEnv] {
-  override def environment: ZEnv            = ZEnv.Services.live
-  override def runtimeConfig: RuntimeConfig = RuntimeConfig.benchmark
+  override def environment: ZEnvironment[ZEnv] = ZEnv.Services.live
+  override def runtimeConfig: RuntimeConfig    = RuntimeConfig.benchmark
 
   @Param(Array("10000"))
   var size: Int = _

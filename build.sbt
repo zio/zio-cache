@@ -36,7 +36,7 @@ addCommandAlias(
   ";zioCacheNative/test:compile"
 )
 
-val zioVersion = "2.0.0-M4"
+val zioVersion = "2.0.0-RC1"
 
 lazy val root = project
   .in(file("."))
