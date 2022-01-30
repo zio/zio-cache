@@ -70,9 +70,7 @@
 </code></pre>
 <p>The lookup function takes a key of type <code>Key</code> and returns a <code>ZIO</code> effect that requires an environment of type <code>Environment</code> and can fail with an error of type <code>Error</code> or succeed with a value of type <code>Value</code>. Because the lookup function returns a <code>ZIO</code> effect it can describe both synchronous and asynchronous workflows.</p>
 <p>We construct a cache using a lookup function as well as a maximum size and a time to live.</p>
-<pre><code class="hljs css language-scala"><span class="hljs-keyword">import</span> zio.duration._
-
-<span class="hljs-class"><span class="hljs-keyword">trait</span> <span class="hljs-title">Cache</span>[-<span class="hljs-type">Key</span>, +<span class="hljs-type">Error</span>, +<span class="hljs-type">Value</span>] </span>{
+<pre><code class="hljs css language-scala"><span class="hljs-class"><span class="hljs-keyword">trait</span> <span class="hljs-title">Cache</span>[-<span class="hljs-type">Key</span>, +<span class="hljs-type">Error</span>, +<span class="hljs-type">Value</span>] </span>{
   <span class="hljs-function"><span class="hljs-keyword">def</span> <span class="hljs-title">get</span></span>(k: <span class="hljs-type">Key</span>): <span class="hljs-type">IO</span>[<span class="hljs-type">Error</span>, <span class="hljs-type">Value</span>]
 }
 

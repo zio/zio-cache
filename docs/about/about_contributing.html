@@ -129,7 +129,7 @@ git <span class="hljs-built_in">clone</span> git@github.com:your-user-name/zio.g
 <p>Once you are done, you can commit again:</p>
 <pre><code class="hljs css language-bash">git commit -am <span class="hljs-string">"merged upstream changes"</span>
 </code></pre>
-<p>Before you push your commit, you should re-run all tests to make sure everything is passing:</p>
+<p>At this point, you should re-run all tests to make sure everything is passing:</p>
 <pre><code class="hljs css language-bash"><span class="hljs-comment"># If you are already in a SBT session you can type only 'test'</span>
 
 sbt <span class="hljs-built_in">test</span>
@@ -138,12 +138,6 @@ sbt <span class="hljs-built_in">test</span>
 <pre><code class="hljs css language-bash"><span class="hljs-comment"># If you are already in a SBT session you can type only 'fmt'</span>
 
 sbt fmt
-</code></pre>
-<p>If you have implemented a new feature or made significant changes, you should also run benchmark suites in your branch as well as in the main branch (trunk). Compare the results of the two benchmarking runs and make sure the performance in your branch is comparable to that of the trunk; otherwise, you should revisit your implementation and/or discuss this with project maintainers.</p>
-<p>To run the benchmark suites in the target branch:</p>
-<pre><code class="hljs css language-bash"><span class="hljs-comment"># If you are already in a SBT session you can type only 'benchmark'</span>
-
-sbt benchmark
 </code></pre>
 <p>If your changes altered an API, then you may need to rebuild the microsite to make sure none of the (compiled) documentation breaks:</p>
 <pre><code class="hljs css language-bash"><span class="hljs-comment"># If you are already in a SBT session you can type only 'docs/docusaurusCreateSite'</span>
