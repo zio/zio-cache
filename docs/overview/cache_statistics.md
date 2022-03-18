@@ -3,7 +3,7 @@ id: overview_cache_statistics
 title: "Cache Statistics"
 ---
 
-ZIO Cache automatically tracks various statistics associated with the cache, such as the number of cache hits and misses, to allow you to assess the effectiveness of the cache. You can access these statistics by using the `cacheStats` operator on `Cache`.
+ZIO Cache automatically tracks various statistics associated with the cache, such as the number of cache hits and misses and the current size of the cache, to allow you to assess the effectiveness of the cache. You can access these statistics by using the `cacheStats` operator on `Cache`.
 
 ```scala mdoc
 import zio._
@@ -11,6 +11,7 @@ import zio._
 trait CacheStats {
   def hits: Long
   def misses: Long
+  def size: Int
 }
 
 trait Cache[-Key, +Error, +Value] {
