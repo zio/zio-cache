@@ -1,6 +1,6 @@
 package zio.cache
 
-import org.openjdk.jmh.annotations._
+import org.openjdk.jmh.annotations.{Scope, _}
 import zio._
 
 import java.util.concurrent.TimeUnit
