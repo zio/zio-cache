@@ -3,8 +3,8 @@ import BuildHelper._
 inThisBuild(
   List(
     organization := "dev.zio",
-    homepage := Some(url("https://zio.github.io/zio-cache/")),
-    licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+    homepage     := Some(url("https://zio.github.io/zio-cache/")),
+    licenses     := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     developers := List(
       Developer(
         "jdegoes",
@@ -22,6 +22,7 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("fix", "; all compile:scalafix test:scalafix; all scalafmtSbt scalafmtAll")
 addCommandAlias("check", "; scalafmtSbtCheck; scalafmtCheckAll; compile:scalafix --check; test:scalafix --check")
+addCommandAlias("benchmark", "benchmarks/Jmh/run")
 
 addCommandAlias(
   "testJVM",
@@ -36,7 +37,7 @@ addCommandAlias(
   ";zioCacheNative/test:compile"
 )
 
-val zioVersion = "2.0.0-RC2"
+val zioVersion = "2.0.0-RC3"
 
 lazy val root = project
   .in(file("."))
@@ -85,7 +86,7 @@ lazy val benchmarks = project
   .settings(stdSettings("zio-cache"))
   .settings(
     publish / skip := true,
-    moduleName := "zio-cache-docs"
+    moduleName     := "zio-cache-docs"
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(JmhPlugin)
@@ -95,13 +96,13 @@ lazy val docs = project
   .settings(stdSettings("zio-cache"))
   .settings(
     publish / skip := true,
-    moduleName := "zio-cache-docs",
+    moduleName     := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
-    ScalaUnidoc / unidoc / target := (LocalRootProject / baseDirectory).value / "website" / "static" / "api",
+    ScalaUnidoc / unidoc / target              := (LocalRootProject / baseDirectory).value / "website" / "static" / "api",
     cleanFiles += (ScalaUnidoc / unidoc / target).value,
-    docusaurusCreateSite := docusaurusCreateSite.dependsOn(Compile / unidoc).value,
+    docusaurusCreateSite     := docusaurusCreateSite.dependsOn(Compile / unidoc).value,
     docusaurusPublishGhpages := docusaurusPublishGhpages.dependsOn(Compile / unidoc).value
   )
   .dependsOn(zioCacheJVM)
