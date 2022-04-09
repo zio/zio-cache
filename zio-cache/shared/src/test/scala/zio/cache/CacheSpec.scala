@@ -138,7 +138,7 @@ object CacheSpec extends ZIOSpecDefault {
       check(Gen.int) { salt =>
         for {
           cache <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
-          _     <- ZIO.foreachParDiscard(1 to 100)(cache.get)
+          _     <- ZIO.foreachDiscard(1 to 100)(cache.get)
           size  <- cache.size
         } yield assertTrue(size == 10)
       }
