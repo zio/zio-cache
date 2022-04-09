@@ -4,17 +4,17 @@ import zio._
 import zio.test.Assertion._
 import zio.test._
 
-object CacheSpec extends ZIOSpecDefault {
+object CacheSpec extends DefaultRunnableSpec {
 
   def hash(x: Int): Int => UIO[Int] =
     y => ZIO.succeed((x ^ y).hashCode)
 
-  def spec: ZSpec[Environment, Any] = suite("CacheSpec")(
+  def spec: ZSpec[Environment, Failure] = suite("CacheSpec")(
     test("cacheStats") {
       check(Gen.int) { salt =>
         for {
           cache      <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
-          _          <- ZIO.foreachParDiscard((1 to 100).map(_ / 2))(cache.get)
+          _          <- ZIO.foreachPar_((1 to 100).map(_ / 2))(cache.get)
           cacheStats <- cache.cacheStats
           hits        = cacheStats.hits
           misses      = cacheStats.misses
@@ -26,17 +26,17 @@ object CacheSpec extends ZIOSpecDefault {
       check(Gen.int) { salt =>
         for {
           cache    <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
-          _        <- ZIO.foreachDiscard(1 to 100)(cache.get)
+          _        <- ZIO.foreach_(1 to 100)(cache.get)
           _        <- cache.invalidate(42)
           contains <- cache.contains(42)
         } yield assert(contains)(isFalse)
       }
     },
-    test("invalidateAll") {
-      check(Gen.int) { salt =>
+    testM("invalidateAll") {
+      checkM(Gen.anyInt) { salt =>
         for {
           cache <- Cache.make(100, Duration.Infinity, Lookup(hash(salt)))
-          _     <- ZIO.foreachDiscard(1 to 100)(cache.get)
+          _     <- ZIO.foreach_(1 to 100)(cache.get)
           _     <- cache.invalidateAll
           size  <- cache.size
         } yield assertTrue(size == 0)
@@ -72,7 +72,7 @@ object CacheSpec extends ZIOSpecDefault {
       }
     ),
     suite("`refresh` method")(
-      test("should update the cache with a new value") {
+      testM("should update the cache with a new value") {
         def inc(n: Int) = n * 10
         def retrieve(multiplier: Ref[Int])(key: Int) =
           multiplier
@@ -90,7 +90,7 @@ object CacheSpec extends ZIOSpecDefault {
           val2  <- cache.get(key)
         } yield assertTrue(val1 == inc(key)) && assertTrue(val2 == inc(val1))
       },
-      test("should update the cache with a new value even if the last `get` or `refresh` failed") {
+      testM("should update the cache with a new value even if the last `get` or `refresh` failed") {
 
         val error = new RuntimeException("Must be a multiple of 3")
 
@@ -122,13 +122,13 @@ object CacheSpec extends ZIOSpecDefault {
           assert(val1)(isRight(equalTo(4))) &&
           assert(val2)(isRight(equalTo(7)))
       },
-      test("should get the value if the key doesn't exist in the cache") {
-        check(Gen.int) { salt =>
+      testM("should get the value if the key doesn't exist in the cache") {
+        checkM(Gen.anyInt) { salt =>
           val cap = 100
           for {
             cache  <- Cache.make(cap, Duration.Infinity, Lookup(hash(salt)))
             count0 <- cache.size
-            _      <- ZIO.foreachDiscard(1 to cap)(cache.refresh)
+            _      <- ZIO.foreach_(1 to cap)(cache.refresh)
             count1 <- cache.size
           } yield assertTrue(count0 == 0) && assertTrue(count1 == cap)
         }
@@ -138,7 +138,7 @@ object CacheSpec extends ZIOSpecDefault {
       check(Gen.int) { salt =>
         for {
           cache <- Cache.make(10, Duration.Infinity, Lookup(hash(salt)))
-          _     <- ZIO.foreachParDiscard(1 to 100)(cache.get)
+          _     <- ZIO.foreachDiscard(1 to 100)(cache.get)
           size  <- cache.size
         } yield assertTrue(size == 10)
       }
