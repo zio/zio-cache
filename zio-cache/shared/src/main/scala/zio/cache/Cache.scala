@@ -2,7 +2,7 @@ package zio.cache
 
 import zio.internal.MutableConcurrentQueue
 import zio.stacktracer.TracingImplicits.disableAutoTrace
-import zio.{Exit, IO, Promise, UIO, URIO, ZIO, Trace}
+import zio.{Exit, IO, Promise, Trace, UIO, URIO, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
