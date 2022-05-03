@@ -11,9 +11,8 @@ import java.util.concurrent.TimeUnit
 @Measurement(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Warmup(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Fork(1)
-class ChurnBenchmark extends zio.Runtime[ZEnv] {
-  override def environment: ZEnvironment[ZEnv] = ZEnv.Services.live
-  override def runtimeConfig: RuntimeConfig    = RuntimeConfig.benchmark
+class ChurnBenchmark extends zio.Runtime[Any] {
+  override def environment: ZEnvironment[Any] = ZEnvironment.empty
 
   @Param(Array("10000"))
   var size: Int = _
