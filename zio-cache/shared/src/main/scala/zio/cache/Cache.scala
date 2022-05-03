@@ -2,7 +2,7 @@ package zio.cache
 
 import zio.internal.MutableConcurrentQueue
 import zio.stacktracer.TracingImplicits.disableAutoTrace
-import zio.{Exit, IO, Promise, UIO, URIO, ZIO, ZTraceElement}
+import zio.{Exit, IO, Promise, UIO, URIO, ZIO, Trace}
 
 import java.time.{Duration, Instant}
 import java.util.Map
@@ -31,25 +31,25 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   /**
    * Returns statistics for this cache.
    */
-  def cacheStats(implicit trace: ZTraceElement): UIO[CacheStats]
+  def cacheStats(implicit trace: Trace): UIO[CacheStats]
 
   /**
    * Returns whether a value associated with the specified key exists in the
    * cache.
    */
-  def contains(key: Key)(implicit trace: ZTraceElement): UIO[Boolean]
+  def contains(key: Key)(implicit trace: Trace): UIO[Boolean]
 
   /**
    * Returns statistics for the specified entry.
    */
-  def entryStats(key: Key)(implicit trace: ZTraceElement): UIO[Option[EntryStats]]
+  def entryStats(key: Key)(implicit trace: Trace): UIO[Option[EntryStats]]
 
   /**
    * Retrieves the value associated with the specified key if it exists.
    * Otherwise computes the value with the lookup function, puts it in the
    * cache, and returns it.
    */
-  def get(key: Key)(implicit trace: ZTraceElement): IO[Error, Value]
+  def get(key: Key)(implicit trace: Trace): IO[Error, Value]
 
   /**
    * Computes the value associated with the specified key, with the lookup
@@ -65,7 +65,7 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   /**
    * Invalidates the value associated with the specified key.
    */
-  def invalidate(key: Key)(implicit trace: ZTraceElement): UIO[Unit]
+  def invalidate(key: Key)(implicit trace: Trace): UIO[Unit]
 
   /**
    * Invalidates all values in the cache.
@@ -75,7 +75,7 @@ sealed abstract class Cache[-Key, +Error, +Value] {
   /**
    * Returns the approximate number of values in the cache.
    */
-  def size(implicit trace: ZTraceElement): UIO[Int]
+  def size(implicit trace: Trace): UIO[Int]
 }
 
 object Cache {
@@ -88,7 +88,7 @@ object Cache {
     capacity: Int,
     timeToLive: Duration,
     lookup: Lookup[Key, Environment, Error, Value]
-  )(implicit trace: ZTraceElement): URIO[Environment, Cache[Key, Error, Value]] =
+  )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
     makeWith(capacity, lookup)(_ => timeToLive)
 
   /**
@@ -101,7 +101,7 @@ object Cache {
     lookup: Lookup[Key, Environment, Error, Value]
   )(
     timeToLive: Exit[Error, Value] => Duration
-  )(implicit trace: ZTraceElement): URIO[Environment, Cache[Key, Error, Value]] =
+  )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
     ZIO.clock.flatMap { clock =>
       ZIO.environment[Environment].flatMap { environment =>
         ZIO.fiberId.map { fiberId =>
@@ -145,13 +145,13 @@ object Cache {
 
           new Cache[Key, Error, Value] {
 
-            override def cacheStats(implicit trace: ZTraceElement): UIO[CacheStats] =
+            override def cacheStats(implicit trace: Trace): UIO[CacheStats] =
               ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
-            override def contains(k: Key)(implicit trace: ZTraceElement): UIO[Boolean] =
+            override def contains(k: Key)(implicit trace: Trace): UIO[Boolean] =
               ZIO.succeed(map.containsKey(k))
 
-            override def entryStats(k: Key)(implicit trace: ZTraceElement): UIO[Option[EntryStats]] =
+            override def entryStats(k: Key)(implicit trace: Trace): UIO[Option[EntryStats]] =
               ZIO.succeed {
                 val value = map.get(k)
                 if (value eq null) None
@@ -167,7 +167,7 @@ object Cache {
                 }
               }
 
-            override def get(k: Key)(implicit trace: ZTraceElement): IO[Error, Value] =
+            override def get(k: Key)(implicit trace: Trace): IO[Error, Value] =
               ZIO.suspendSucceed {
                 var key: MapKey[Key]               = null
                 var promise: Promise[Error, Value] = null
@@ -241,7 +241,7 @@ object Cache {
                 result.unit
               }
 
-            override def invalidate(k: Key)(implicit trace: ZTraceElement): UIO[Unit] =
+            override def invalidate(k: Key)(implicit trace: Trace): UIO[Unit] =
               ZIO.succeed {
                 map.remove(k)
                 ()
@@ -252,7 +252,7 @@ object Cache {
                 map.clear()
               }
 
-            def size(implicit trace: ZTraceElement): UIO[Int] =
+            def size(implicit trace: Trace): UIO[Int] =
               ZIO.succeed(map.size)
 
             private def lookupValueOf(key: Key, promise: Promise[Error, Value]): IO[Error, Value] =
