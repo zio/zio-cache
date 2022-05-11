@@ -281,7 +281,6 @@ object Cache {
       }
     }
 
-
   /**
    * A `MapValue` represents a value in the cache. A value may either be
    * `Pending` with a `Promise` that will contain the result of computing the

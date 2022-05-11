@@ -1,6 +1,6 @@
 package zio.cache
 
-import zio.{ZIO, ZManaged}
+import zio.ZManaged
 
 /**
  * Like lookup but managed version
