@@ -39,7 +39,7 @@ sealed abstract class ManagedCache[-Key, +Error, +Value] {
    * @param key
    * @return
    */
-  def get(key: Key): UIO[Managed[Error, Value]]
+  def get(key: Key): Managed[Error, Value]
 
   /**
    * Force the reuse of the lookup function to compute the returned managed associated with the specified key immediately
@@ -173,9 +173,9 @@ object ManagedCache {
             }
           }
 
-        override def get(k: Key): UIO[Managed[Error, Value]] = lookupValueOf(k).memoize.map { lookupValue =>
-          Managed.unwrap {
-            UIO.effectTotal {
+        override def get(k: Key): Managed[Error, Value] = Managed.unwrap {
+          lookupValueOf(k).memoize.flatMap { lookupValue =>
+            UIO.effectSuspendTotal {
               var key: MapKey[Key] = null
               var value            = map.get(k)
               if (value eq null) {
@@ -194,7 +194,7 @@ object ManagedCache {
                     trackHit()
                     if (hasExpired(timeToLive)) {
                       map.remove(k, value)
-                      ensureMapSizeNotExceeded(key) *> complete.releaseOwner *> get(k)
+                      ensureMapSizeNotExceeded(key) *> complete.releaseOwner *> ZIO.succeed(get(k))
                     } else {
                       ensureMapSizeNotExceeded(key).as(complete.toManaged)
                     }
@@ -207,7 +207,7 @@ object ManagedCache {
                     }
                 }
               }
-            }.flatten
+            }
           }
         }
 
@@ -226,12 +226,12 @@ object ManagedCache {
                 managedEffect
               case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
                 if (hasExpired(ttl)) {
-                  get(k)
+                  ZIO.succeed(get(k))
                 } else {
                   if (map.replace(k, completeResult, MapValue.Refreshing(managed, completeResult))) {
                     managed
                   } else {
-                    get(k)
+                    ZIO.succeed(get(k))
                   }
                 }
               case MapValue.Refreshing(managed, _) => managed

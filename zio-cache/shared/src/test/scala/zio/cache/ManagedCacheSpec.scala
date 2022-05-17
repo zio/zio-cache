@@ -5,6 +5,7 @@ import zio.clock.Clock
 import zio.duration._
 import zio.random.Random
 import zio.test.Assertion._
+import zio.test.TestAspect.samples
 import zio.test._
 
 object ManagedCacheSpec extends DefaultRunnableSpec {
@@ -20,7 +21,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
           )
         managedCache.use { cache =>
           for {
-            _          <- ZIO.foreachPar_((1 to capacity).map(_ / 2))(cache.get(_).flatMap(_.use_(ZIO.unit)))
+            _          <- ZIO.foreachPar_((1 to capacity).map(_ / 2))(cache.get(_).use_(ZIO.unit))
             cacheStats <- cache.cacheStats
           } yield assert(cacheStats)(equalTo(CacheStats(hits = 49, misses = 51, size = 51)))
         }
@@ -39,7 +40,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
         result <-
           managedCache.use { cache =>
             for {
-              _                    <- ZIO.foreachPar_((0 until capacity))(cache.get(_).flatMap(_.use_(ZIO.unit)))
+              _                    <- ZIO.foreachPar_((0 until capacity))(cache.get(_).use_(ZIO.unit))
               _                    <- cache.invalidate(42)
               cacheContainsKey42   <- cache.contains(42)
               cacheStats           <- cache.cacheStats
@@ -64,7 +65,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
           ManagedCache.make(capacity, Duration.Infinity, ManagedLookup { key: Int => observablesResource(key).managed })
         result <- managedCache.use { cache =>
                     for {
-                      _          <- ZIO.foreachPar_((0 until capacity))(cache.get(_).flatMap(_.use_(ZIO.unit)))
+                      _          <- ZIO.foreachPar_((0 until capacity))(cache.get(_).use_(ZIO.unit))
                       _          <- cache.invalidateAll
                       contains   <- ZIO.foreachPar(0 to capacity)(cache.contains(_))
                       cacheStats <- cache.cacheStats
@@ -83,7 +84,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
             ManagedCache.make(100, Duration.Infinity, ManagedLookup { key: Int => Managed.succeed(hash(salt)(key)) })
           managedCache.use { cache =>
             for {
-              actual  <- ZIO.foreach(1 to 100)(cache.get(_).flatMap(_.use(ZIO.succeed(_))))
+              actual  <- ZIO.foreach(1 to 100)(cache.get(_).use(ZIO.succeed(_)))
               expected = (1 to 100).map(hash(salt))
             } yield assert(actual)(equalTo(expected))
           }
@@ -95,7 +96,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
             ManagedCache.make(100, Duration.Infinity, ManagedLookup { key: Int => Managed.succeed(hash(salt)(key)) })
           managedCache.use { cache =>
             for {
-              actual  <- ZIO.foreachPar(1 to 100)(cache.get(_).flatMap(_.use(ZIO.succeed(_))))
+              actual  <- ZIO.foreachPar(1 to 100)(cache.get(_).use(ZIO.succeed(_)))
               expected = (1 to 100).map(hash(salt))
             } yield assert(actual)(equalTo(expected))
           }
@@ -107,7 +108,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
             ManagedCache.make(10, Duration.Infinity, ManagedLookup { key: Int => Managed.succeed(hash(salt)(key)) })
           managedCache.use { cache =>
             for {
-              actual     <- ZIO.foreach(1 to 100)(cache.get(_).flatMap(_.use(ZIO.succeed(_))))
+              actual     <- ZIO.foreach(1 to 100)(cache.get(_).use(ZIO.succeed(_)))
               expected    = (1 to 100).map(hash(salt))
               cacheStats <- cache.cacheStats
             } yield assert(actual)(equalTo(expected)) && assert(cacheStats.size)(equalTo(10))
@@ -126,7 +127,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
             managedCache.use { cache =>
               for {
                 notAcquiredBeforeAnything                 <- subResource.assertNotAcquired
-                resourceManagedProxy                      <- cache.get(key = ())
+                resourceManagedProxy                       = cache.get(key = ())
                 notAcquireYetAfterGettingManagedFromCache <- subResource.assertNotAcquired
                 _                                         <- resourceManagedProxy.use(ZIO.succeed(_))
                 acquireOnceAfterUse                       <- subResource.assertAcquiredOnceAndNotCleaned
@@ -148,9 +149,9 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
           checkInside <- managedCache.use { cache =>
                            for {
                              notAcquiredBeforeAnything <- subResource.assertNotAcquired
-                             _                         <- cache.get(key = ()).flatMap(_.use(ZIO.succeed(_)))
+                             _                         <- cache.get(key = ()).use(ZIO.succeed(_))
                              acquireOnceAfterUse       <- subResource.assertAcquiredOnceAndNotCleaned
-                             _                         <- cache.get(key = ()).flatMap(_.use(ZIO.succeed(_)))
+                             _                         <- cache.get(key = ()).use(ZIO.succeed(_))
                              acquireOnceAfterSecondUse <- subResource.assertAcquiredOnceAndNotCleaned
                            } yield notAcquiredBeforeAnything && acquireOnceAfterUse && acquireOnceAfterSecondUse
                          }
@@ -170,7 +171,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
             managedCache.use { cache =>
               for {
                 notAcquiredBeforeAnything                 <- watchableLookup.assertCalledNum(key = ())(equalTo(0))
-                resourceManagedProxy                      <- cache.get(key = ())
+                resourceManagedProxy                       = cache.get(key = ())
                 notAcquireYetAfterGettingManagedFromCache <- watchableLookup.assertCalledNum(key = ())(equalTo(0))
                 _                                         <- resourceManagedProxy.use(ZIO.succeed(_)).either
                 acquireAndCleanedRightAway                <- watchableLookup.assertAllCleanedForKey(())
@@ -190,8 +191,8 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                          )
           checkInside <-
             managedCache.use { cache =>
+              val managed = cache.get(key = ())
               for {
-                managed                            <- cache.get(key = ())
                 Reservation(acquire1, release1)    <- managed.reserve
                 Reservation(acquire2, release2)    <- managed.reserve
                 acquisition                        <- subResource.assertNotAcquired
@@ -220,7 +221,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
             managedCache.use { cache =>
               for {
                 notAcquiredBeforeAnything                 <- watchableLookup.assertCalledNum(key = ())(equalTo(0))
-                resourceManagedProxy                      <- cache.get(key = ())
+                resourceManagedProxy                       = cache.get(key = ())
                 notAcquireYetAfterGettingManagedFromCache <- watchableLookup.assertCalledNum(key = ())(equalTo(0))
                 _                                         <- resourceManagedProxy.use(ZIO.succeed(_)).either <&> resourceManagedProxy.use(ZIO.succeed(_)).either
                 acquireAndCleanedRightAway                <- watchableLookup.assertAllCleanedForKey(())
@@ -237,8 +238,8 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
           managedCache = ManagedCache.make(1, 60.second, ManagedLookup { _: Unit => subResource.managed })
           (release1, release2) <- managedCache.use { cache =>
                                     for {
-                                      Reservation(acquire1, release1) <- cache.get(key = ()).flatMap(_.reserve)
-                                      Reservation(acquire2, release2) <- cache.get(key = ()).flatMap(_.reserve)
+                                      Reservation(acquire1, release1) <- cache.get(key = ()).reserve
+                                      Reservation(acquire2, release2) <- cache.get(key = ()).reserve
                                       _                               <- acquire2
                                       _                               <- acquire1
                                     } yield (release1, release2)
@@ -257,8 +258,8 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
           subResource <- ObservableResourceForTest.makeUnit
           managedCache = ManagedCache.make(1, 60.second, ManagedLookup { _: Unit => subResource.managed })
           (release1, release2) <- managedCache.use { cache =>
+                                    val manager = cache.get(key = ())
                                     for {
-                                      manager                         <- cache.get(key = ())
                                       Reservation(acquire1, release1) <- manager.reserve
                                       Reservation(acquire2, release2) <- manager.reserve
                                       _                               <- acquire2
@@ -285,7 +286,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
               managedCache.use { cache =>
                 for {
                   _ <- ZIO.foreach_((0 until numCreatedKey).toList) { key =>
-                         cache.get(key).flatMap(_.use_(ZIO.unit))
+                         cache.get(key).use_(ZIO.unit)
                        }
                   createdResource <- watchableLookup.createdResources
                   oldestResourceCleaned <-
@@ -323,10 +324,10 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                          )
           result <- managedCache.use { cache =>
                       for {
-                        val1 <- cache.get(key).flatMap(_.use(ZIO.succeed(_)))
+                        val1 <- cache.get(key).use(ZIO.succeed(_))
                         _    <- cache.refresh(key)
-                        val2 <- cache.get(key).flatMap(_.use(ZIO.succeed(_)))
-                        val3 <- cache.get(key).flatMap(_.use(ZIO.succeed(_)))
+                        val2 <- cache.get(key).use(ZIO.succeed(_))
+                        val3 <- cache.get(key).use(ZIO.succeed(_))
                       } yield assert(val2)(equalTo[Int, Int](val3) && equalTo[Int, Int](inc(val1)))
                     }
         } yield result
@@ -342,7 +343,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                          )
           result <- managedCache.use { cache =>
                       for {
-                        _                        <- cache.get(key = ()).flatMap(_.use_(ZIO.unit))
+                        _                        <- cache.get(key = ()).use_(ZIO.unit)
                         _                        <- cache.refresh(key = ())
                         createdResources         <- watchableLookup.createdResources.map(_.apply(key = ()))
                         firstResourceCleaned     <- createdResources.head.assertAcquiredOnceAndCleaned
@@ -377,13 +378,13 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                          )
           result <- managedCache.use { cache =>
                       for {
-                        failure1 <- cache.get(key).flatMap(_.use(ZIO.succeed(_))).either
+                        failure1 <- cache.get(key).use(ZIO.succeed(_)).either
                         _        <- cache.refresh(key)
-                        val1     <- cache.get(key).flatMap(_.use(ZIO.succeed(_))).either
+                        val1     <- cache.get(key).use(ZIO.succeed(_)).either
                         _        <- cache.refresh(key)
                         failure2 <- cache.refresh(key).either
                         _        <- cache.refresh(key)
-                        val2     <- cache.get(key).flatMap(_.use(ZIO.succeed(_))).either
+                        val2     <- cache.get(key).use(ZIO.succeed(_)).either
                       } yield assert(failure1)(isLeft(equalTo(error))) &&
                         assert(failure2)(isLeft(equalTo(error))) &&
                         assert(val1)(isRight(equalTo(4))) &&
@@ -448,8 +449,8 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                     10.second
                 }
                 .use { managedCache: ManagedCache[Unit, Nothing, Unit] =>
+                  val subManaged = managedCache.get(())
                   for {
-                    subManaged                      <- managedCache.get(())
                     _                               <- subManaged.use_(ZIO.unit)
                     _                               <- fakeClock.advance(5.second)
                     _                               <- subManaged.use_(ZIO.unit)
@@ -476,7 +477,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                           10.second
                         }
                         .use { managedCache: ManagedCache[Unit, Nothing, Unit] =>
-                          val useGetManaged = managedCache.get(key = ()).flatMap(_.use_(ZIO.unit))
+                          val useGetManaged = managedCache.get(key = ()).use_(ZIO.unit)
                           for {
                             _                        <- useGetManaged
                             _                        <- fakeClock.advance(5.second)
@@ -505,10 +506,10 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         }
                         .use { managedCache: ManagedCache[Unit, Nothing, Unit] =>
                           for {
-                            Reservation(acquire, release)   <- managedCache.get(()).flatMap(_.reserve)
+                            Reservation(acquire, release)   <- managedCache.get(()).reserve
                             _                               <- acquire
                             _                               <- fakeClock.advance(11.second)
-                            _                               <- managedCache.get(()).flatMap(_.use_(ZIO.unit))
+                            _                               <- managedCache.get(()).use_(ZIO.unit)
                             twoResourcesCreated             <- watchableLookup.assertCalledNum(key = ())(equalTo(2))
                             firstCreatedResource            <- watchableLookup.firstCreatedResource(key = ())
                             notCleanedBeforeItFinishToBeUse <- firstCreatedResource.assertAcquiredOnceAndNotCleaned
@@ -530,7 +531,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         }
                         .use { managedCache: ManagedCache[Unit, Nothing, Unit] =>
                           for {
-                            _            <- managedCache.get(key = ()).flatMap(_.use_(ZIO.unit))
+                            _            <- managedCache.get(key = ()).use_(ZIO.unit)
                             _            <- fakeClock.advance(9.second)
                             _            <- watchableLookup.lock
                             refreshFiber <- managedCache.refresh(key = ()).fork
@@ -560,7 +561,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         }
                         .use { managedCache: ManagedCache[Unit, Nothing, Unit] =>
                           for {
-                            _            <- managedCache.get(key = ()).flatMap(_.use_(ZIO.unit))
+                            _            <- managedCache.get(key = ()).use_(ZIO.unit)
                             _            <- fakeClock.advance(11.second)
                             _            <- watchableLookup.lock
                             refreshFiber <- managedCache.refresh(key = ()).fork
@@ -588,7 +589,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         }
                         .use { managedCache: ManagedCache[Unit, Nothing, Unit] =>
                           for {
-                            Reservation(acquire, release) <- managedCache.get(key = ()).flatMap(_.reserve)
+                            Reservation(acquire, release) <- managedCache.get(key = ()).reserve
                             _                             <- acquire
                             _                             <- fakeClock.advance(11.second)
                             _                             <- managedCache.refresh(key = ())
@@ -653,8 +654,8 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
           sequenceOfFailureOrSuccess: List[Boolean]
         )
         val genTestInput = for {
-          operations                <- balancedSequenceOfAcquireReleaseAndRefresh
-          cacheSize                 <- Gen.int(1, 10)
+          operations                 <- balancedSequenceOfAcquireReleaseAndRefresh
+          cacheSize                  <- Gen.int(1, 10)
           sequenceOfFailureOrSuccess <- Gen.listOfN(operations.length)(Gen.boolean)
         } yield TestInput(operations, cacheSize, sequenceOfFailureOrSuccess)
 
@@ -901,7 +902,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
               case Acquire(totalId @ ResourceId(key, _)) =>
                 managedCache
                   .get(key)
-                  .flatMap(_.reserve)
+                  .reserve
                   .flatMap { case Reservation(acquire, release) =>
                     acquire.as(releasers.updated(totalId, release))
                   }
