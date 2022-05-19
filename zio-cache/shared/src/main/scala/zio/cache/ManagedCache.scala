@@ -127,7 +127,7 @@ object ManagedCache {
               val removed = map.remove(key.value)
               if (removed ne null) {
                 size -= 1
-                cleanedKey.addOne(removed)
+                cleanedKey += removed
                 loop = size > capacity
               }
             } else {
