@@ -18,7 +18,9 @@ sealed abstract class ManagedCache[-Key, +Error, +Value] {
   def cacheStats: UIO[CacheStats]
 
   /**
-   * Return whether a Managed associated with the specified key exists in the cache.
+   * Return whether a resource associated with the specified key exists in the cache.
+   * Sometime `contains` can return true if the resource is currently being created
+   * but not yet totally created
    * @param key
    * @return
    */
@@ -30,12 +32,9 @@ sealed abstract class ManagedCache[-Key, +Error, +Value] {
   def entryStats(key: Key): UIO[Option[EntryStats]]
 
   /**
-   * Give a proxy managed on the resource already created for this key if any.
-   * Otherwise computes the managed with the lookup function, puts it in the cache,
-   * and returns it.
-   * The given managed is lazy, before it's actually used the resource is not created and
-   * cached.
-   * The register creation time for the given resource is saved one the first managed used
+   * Return a managed that gets the value from the cache if it exists or otherwise computes it, the release action
+   * signals to the cache that the value is no longer being used and can potentially be finalized subject to the
+   * policies of the cache
    * @param key
    * @return
    */
