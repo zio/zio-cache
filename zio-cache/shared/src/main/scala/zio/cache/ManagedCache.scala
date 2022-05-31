@@ -32,9 +32,8 @@ sealed abstract class ManagedCache[-Key, +Error, +Value] {
   def entryStats(key: Key): UIO[Option[EntryStats]]
 
   /**
-   * Return a managed that gets the value from the cache if it exists or otherwise computes it, the release action
-   * signals to the cache that the value is no longer being used and can potentially be finalized subject to the
-   * policies of the cache
+   * Gets the value from the cache if it exists or otherwise computes it, the release action signals to the cache that
+   * the value is no longer being used and can potentially be finalized subject to the policies of the cache
    * @param key
    * @return
    */

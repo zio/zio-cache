@@ -81,7 +81,26 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
       } yield result
     },
     suite(".get")(
-      testM(" when use sequentially, should properly call correct lookup") {
+      testM("should not put anything in the cache before returned managed by get is used") {
+        for {
+          subResource <- ObservableResourceForTest.makeUnit
+          managedCache = ManagedCache.make(
+                           capacity = 1,
+                           timeToLive = 60.second,
+                           lookup = ManagedLookup((_: Unit) => subResource.managed)
+                         )
+          checkInside <-
+            managedCache.use { cache =>
+              for {
+                notAcquiredBeforeAnything                 <- subResource.assertNotAcquired
+                resourceManagedProxy                       = cache.get(key = ())
+                notAcquireYetAfterGettingManagedFromCache <- subResource.assertNotAcquired
+                keyPresent                                <- cache.contains(key = ())
+              } yield notAcquiredBeforeAnything && assert(keyPresent)(isFalse)
+            }
+        } yield checkInside
+      },
+      testM("when use sequentially, should properly call correct lookup") {
         checkM(Gen.anyInt) { salt =>
           val managedCache =
             ManagedCache.make(100, Duration.Infinity, ManagedLookup((key: Int) => Managed.succeed(hash(salt)(key))))
