@@ -93,10 +93,12 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
             managedCache.use { cache =>
               for {
                 notAcquiredBeforeAnything                 <- subResource.assertNotAcquired
-                resourceManagedProxy                       = cache.get(key = ())
+                _                                          = cache.get(key = ())
                 notAcquireYetAfterGettingManagedFromCache <- subResource.assertNotAcquired
                 keyPresent                                <- cache.contains(key = ())
-              } yield notAcquiredBeforeAnything && assert(keyPresent)(isFalse)
+              } yield notAcquiredBeforeAnything && assert(keyPresent)(
+                isFalse
+              ) && notAcquireYetAfterGettingManagedFromCache
             }
         } yield checkInside
       },
