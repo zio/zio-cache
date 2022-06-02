@@ -4,6 +4,7 @@ import zio._
 import zio.duration._
 import zio.test.Assertion._
 import zio.test._
+import zio.test.environment.TestClock.adjust
 
 object CacheSpec extends DefaultRunnableSpec {
 
@@ -41,6 +42,35 @@ object CacheSpec extends DefaultRunnableSpec {
           _     <- cache.invalidateAll
           size  <- cache.size
         } yield assertTrue(size == 0)
+      }
+    },
+    testM("invalidationEvents") {
+      import InvalidationEvent._
+      checkM(Gen.anyInt) { salt =>
+        val time = 1.millis
+        for {
+          cache  <- Cache.make(2, Duration.Infinity, Lookup(hash(salt)))
+          fiber  <- cache.invalidationEvents.take(3).runCollect.fork
+          _      <- cache.get(1).delay(time).fork
+          _      <- adjust(time)
+          _      <- cache.invalidate(1).delay(time).fork
+          _      <- adjust(time)
+          _      <- cache.get(2).delay(time).fork
+          _      <- adjust(time)
+          _      <- cache.get(3).delay(time).fork
+          _      <- adjust(time)
+          _      <- cache.get(4).delay(time).fork
+          _      <- adjust(time)
+          _      <- cache.invalidateAll.delay(time).fork
+          _      <- adjust(time)
+          result <- fiber.join
+        } yield assertTrue(
+          result == Chunk(
+            SingleInvalidation(key = 1),
+            OverCapacityInvalidation(keys = Chunk(2)),
+            InvalidationAll(count = 2)
+          )
+        )
       }
     },
     suite("lookup")(
