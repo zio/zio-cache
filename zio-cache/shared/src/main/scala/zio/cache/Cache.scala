@@ -282,17 +282,6 @@ object Cache {
     }
 
   /**
-   * A `MapKey` represents a key in the cache. It contains mutable references
-   * to the previous key and next key in the `KeySet` to support an efficient
-   * implementation of a sorted set of keys.
-   */
-  private final class MapKey[Key](
-    val value: Key,
-    var previous: MapKey[Key] = null,
-    var next: MapKey[Key] = null
-  )
-
-  /**
    * A `MapValue` represents a value in the cache. A value may either be
    * `Pending` with a `Promise` that will contain the result of computing the
    * lookup function, when it is available, or `Complete` with an `Exit` value
@@ -345,61 +334,5 @@ object Cache {
         new LongAdder,
         new AtomicBoolean(false)
       )
-  }
-
-  /**
-   * A `KeySet` is a sorted set of keys in the cache ordered by last access.
-   * For efficiency, the set is implemented in terms of a doubly linked list
-   * and is not safe for concurrent access.
-   */
-  private final class KeySet[Key] {
-    private[this] var head: MapKey[Key] = null
-    private[this] var tail: MapKey[Key] = null
-
-    /**
-     * Adds the specified key to the set.
-     */
-    def add(key: MapKey[Key]): Unit =
-      if (key ne tail) {
-        if (tail ne null) {
-          val previous = key.previous
-          val next     = key.next
-          if (next ne null) {
-            key.next = null
-            if (previous ne null) {
-              previous.next = next
-              next.previous = previous
-            } else {
-              head = next
-              head.previous = null
-            }
-          }
-          tail.next = key
-          key.previous = tail
-          tail = key
-        } else {
-          head = key
-          tail = key
-        }
-      }
-
-    /**
-     * Removes the lowest priority key from the set.
-     */
-    def remove(): MapKey[Key] = {
-      val key = head
-      if (key ne null) {
-        val next = key.next
-        if (next ne null) {
-          key.next = null
-          head = next
-          head.previous = null
-        } else {
-          head = null
-          tail = null
-        }
-      }
-      key
-    }
   }
 }
