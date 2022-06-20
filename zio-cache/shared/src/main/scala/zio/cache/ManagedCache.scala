@@ -238,12 +238,13 @@ object ManagedCache {
           finalManaged.flatMap(_.use_(ZIO.unit))
         }
 
-        override def invalidate(k: Key): UIO[Unit] =
+        override def invalidate(k: Key): UIO[Unit] = UIO.effectSuspendTotal {
           map.remove(k) match {
             case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
             case MapValue.Refreshing(_, complete)            => complete.releaseOwner
             case _                                           => UIO.unit
           }
+        }
 
         override def invalidateAll: UIO[Unit] =
           ZIO.foreachPar_(map.keySet().asScala)(invalidate)

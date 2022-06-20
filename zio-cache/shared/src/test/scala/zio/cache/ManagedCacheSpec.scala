@@ -56,6 +56,32 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
           }
       } yield result
     },
+    testM("invalidate should not invalidate anything before effect is evaluated") {
+      for {
+        observablesResource <- ObservableResourceForTest.makeUnit
+        managedCache =
+          ManagedCache.make(
+            capacity = 4,
+            timeToLive = Duration.Infinity,
+            lookup = ManagedLookup((_: Unit) => observablesResource.managed)
+          )
+        result <-
+          managedCache.use { cache =>
+            for {
+              _                                  <- cache.get(key = ()).use_(ZIO.unit)
+              invalidateEffect                    = cache.invalidate(key = ())
+              cacheContainsKey42BeforeInvalidate <- cache.contains(key = ())
+              resourceNotCleanedBeforeInvalidate <- observablesResource.assertAcquiredOnceAndNotCleaned
+              _                                  <- cache.get(()).use_(ZIO.unit)
+              _                                  <- invalidateEffect
+              cacheContainsKey42AfterInvalidate  <- cache.contains(key = ())
+              resourceCleanedAfterInvalidate     <- observablesResource.assertAcquiredOnceAndCleaned
+            } yield assert(cacheContainsKey42BeforeInvalidate)(isTrue) && assert(cacheContainsKey42AfterInvalidate)(
+              isFalse
+            ) && resourceNotCleanedBeforeInvalidate && resourceCleanedAfterInvalidate
+          }
+      } yield result
+    },
     testM("invalidateAll should properly remove and clean all resource from the cache") {
       val capacity = 100
       for {
