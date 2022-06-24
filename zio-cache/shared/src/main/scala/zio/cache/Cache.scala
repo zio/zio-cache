@@ -2,7 +2,7 @@ package zio.cache
 
 import zio.internal.MutableConcurrentQueue
 import zio.stacktracer.TracingImplicits.disableAutoTrace
-import zio.{Exit, IO, Promise, Trace, UIO, URIO, ZIO}
+import zio.{Exit, IO, Promise, Trace, UIO, URIO, Unsafe, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
@@ -168,7 +168,7 @@ object Cache {
               }
 
             override def get(k: Key)(implicit trace: Trace): IO[Error, Value] =
-              ZIO.suspendSucceed {
+              ZIO.suspendSucceedUnsafe { implicit u =>
                 var key: MapKey[Key]               = null
                 var promise: Promise[Error, Value] = null
                 var value                          = map.get(k)
@@ -212,7 +212,7 @@ object Cache {
               }
 
             override def refresh(k: Key): IO[Error, Unit] =
-              ZIO.suspendSucceed {
+              ZIO.suspendSucceedUnsafe { implicit u =>
                 val promise = newPromise()
                 var value   = map.get(k)
                 if (value eq null) {
@@ -260,7 +260,7 @@ object Cache {
                 .provideEnvironment(environment)
                 .exit
                 .flatMap { exit =>
-                  val now        = clock.unsafeInstant()
+                  val now        = Unsafe.unsafeCompat(implicit u => clock.unsafe.instant())
                   val entryStats = EntryStats(now)
 
                   map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
@@ -268,11 +268,11 @@ object Cache {
                 }
                 .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
 
-            private def newPromise() =
-              Promise.unsafeMake[Error, Value](fiberId)
+            private def newPromise()(implicit unsafe: Unsafe) =
+              Promise.unsafe.make[Error, Value](fiberId)
 
-            private def hasExpired(timeToLive: Instant) =
-              clock.unsafeInstant().isAfter(timeToLive)
+            private def hasExpired(timeToLive: Instant)(implicit unsafe: Unsafe) =
+              clock.unsafe.instant().isAfter(timeToLive)
           }
         }
       }

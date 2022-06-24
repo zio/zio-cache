@@ -12,7 +12,9 @@ import java.util.concurrent.TimeUnit
 @Warmup(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Fork(1)
 class FillBenchmark extends zio.Runtime[Any] {
-  override def environment: ZEnvironment[Any] = ZEnvironment.empty
+  override val environment: ZEnvironment[Any] = ZEnvironment.empty
+  override val fiberRefs: FiberRefs           = FiberRefs.empty
+  override val runtimeFlags: RuntimeFlags     = RuntimeFlags.default
 
   @Param(Array("10000"))
   var size: Int = _
@@ -27,10 +29,14 @@ class FillBenchmark extends zio.Runtime[Any] {
 
   @Benchmark
   def zioCacheFill(): Unit =
-    unsafeRun(
-      for {
-        cache <- Cache.make(size, Duration.Infinity, identityLookup)
-        _     <- ZIO.foreachDiscard(strings)(cache.get(_))
-      } yield ()
-    )
+    Unsafe.unsafe { implicit u =>
+      unsafe
+        .run(
+          for {
+            cache <- Cache.make(size, Duration.Infinity, identityLookup)
+            _     <- ZIO.foreachDiscard(strings)(cache.get(_))
+          } yield ()
+        )
+        .getOrThrowFiberFailure()
+    }
 }
