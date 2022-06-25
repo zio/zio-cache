@@ -845,9 +845,15 @@ object ManagedCacheSpec extends ZIOSpecDefault {
       }
 
       override def managed: ZIO[Scope, E, V] =
-        ZIO.acquireRelease(resourceAcquisitionCount.update(_ + 1) *> effect)(_ =>
-          resourceAcquisitionReleasing.update(_ + 1)
-        )
+        ZIO.uninterruptibleMask { restore =>
+          for {
+            parent <- ZIO.scope
+            child  <- parent.fork
+            _      <- resourceAcquisitionCount.update(_ + 1)
+            _      <- child.addFinalizer(resourceAcquisitionReleasing.update(_ + 1))
+            value  <- ZIO.acquireReleaseInterruptibleExit(restore(effect))(child.close(_))
+          } yield value
+        }
     }
   }
 
