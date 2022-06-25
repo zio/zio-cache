@@ -5,7 +5,7 @@ import zio.test.Assertion._
 import zio.test._
 
 object ManagedCacheSpec extends ZIOSpecDefault {
-  override def spec = suite("SharedManaged")(
+  override def spec: Spec[Environment, Any] = suite("SharedManaged")(
     test("cacheStats should correctly keep track of cache size, hits and misses") {
       check(Gen.int) { salt =>
         val capacity = 100
