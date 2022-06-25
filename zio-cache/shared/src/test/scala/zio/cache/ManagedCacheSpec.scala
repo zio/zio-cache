@@ -2,7 +2,6 @@ package zio.cache
 
 import zio._
 import zio.test.Assertion._
-import zio.test.Spec.empty.ZSpec
 import zio.test._
 
 object ManagedCacheSpec extends ZIOSpecDefault {
