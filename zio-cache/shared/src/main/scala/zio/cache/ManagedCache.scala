@@ -92,7 +92,7 @@ object ManagedCache {
    * lookup function, where the time to live can depend on the `Exit` value
    * returned by the lookup function.
    */
-  def makeWith[Key, Environment, Error, Value](
+  def makeWithM[Key, Environment, Error, Value](
     capacity: Int,
     managedLookup: ManagedLookup[Key, Environment, Error, Value]
   )(timeToLive: Exit[Error, Value] => UIO[Duration]): URManaged[Environment, ManagedCache[Key, Error, Value]] =
