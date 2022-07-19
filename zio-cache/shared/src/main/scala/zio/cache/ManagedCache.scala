@@ -85,6 +85,17 @@ object ManagedCache {
     capacity: Int,
     managedLookup: ManagedLookup[Key, Environment, Error, Value]
   )(timeToLive: Exit[Error, Value] => Duration): URManaged[Environment, ManagedCache[Key, Error, Value]] =
+    makeWith(capacity, managedLookup, Clock.systemUTC())(exit => ZIO.succeed(timeToLive(exit)))
+
+  /**
+   * Constructs a new cache with the specified capacity, time to live, and
+   * lookup function, where the time to live can depend on the `Exit` value
+   * returned by the lookup function.
+   */
+  def makeWith[Key, Environment, Error, Value](
+    capacity: Int,
+    managedLookup: ManagedLookup[Key, Environment, Error, Value]
+  )(timeToLive: Exit[Error, Value] => UIO[Duration]): URManaged[Environment, ManagedCache[Key, Error, Value]] =
     makeWith(capacity, managedLookup, Clock.systemUTC())(timeToLive)
 
   //util for test because it allow to inject a mocked Clock
@@ -92,14 +103,14 @@ object ManagedCache {
     capacity: Int,
     managedLookup: ManagedLookup[Key, Environment, Error, Value],
     clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): URManaged[Environment, ManagedCache[Key, Error, Value]] =
+  )(timeToLive: Exit[Error, Value] => UIO[Duration]): URManaged[Environment, ManagedCache[Key, Error, Value]] =
     ZManaged.make(buildWith(capacity, managedLookup, clock)(timeToLive))(_.invalidateAll)
 
   private def buildWith[Key, Environment, Error, Value](
     capacity: Int,
     managedLookup: ManagedLookup[Key, Environment, Error, Value],
     clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment, ManagedCache[Key, Error, Value]] =
+  )(timeToLive: Exit[Error, Value] => UIO[Duration]): URIO[Environment, ManagedCache[Key, Error, Value]] =
     ZIO.environment[Environment].map { environment =>
       val cacheState = CacheState.initial[Key, Error, Value]()
       import cacheState._
@@ -260,45 +271,49 @@ object ManagedCache {
           }
 
         private def lookupValueOf(key: Key): UIO[Managed[Error, Value]] = for {
-          managedEffect <- (for {
-                             reservation <- managedLookup(key)
-                                              .provide(environment)
-                                              .reserve
-                             exit <- reservation.acquire.run
-                           } yield (exit, reservation.release))
+          managedEffect <- (
+                             for {
+                               reservation <- managedLookup(key)
+                                                .provide(environment)
+                                                .reserve
+                               exit <- reservation.acquire.run
+                             } yield (exit, reservation.release)
+                           )
                              .onInterrupt(ZIO.effectTotal(map.remove(key)))
                              .flatMap { case (exit, release) =>
-                               val now       = Instant.now(clock)
-                               val expiredAt = now.plus(timeToLive(exit))
-                               exit match {
-                                 case Exit.Success(value) =>
-                                   val exitWithReleaser: Exit[Nothing, (Value, Finalizer)] =
-                                     Exit.succeed(value -> release)
-                                   val completedResult = MapValue
-                                     .Complete(
-                                       key = new MapKey(key),
-                                       exit = exitWithReleaser,
-                                       ownerCount = new AtomicInteger(1),
-                                       entryStats = EntryStats(now),
-                                       timeToLive = expiredAt
+                               timeToLive(exit).flatMap { ttl =>
+                                 val now       = Instant.now(clock)
+                                 val expiredAt = now.plus(ttl)
+                                 exit match {
+                                   case Exit.Success(value) =>
+                                     val exitWithReleaser: Exit[Nothing, (Value, Finalizer)] =
+                                       Exit.succeed(value -> release)
+                                     val completedResult = MapValue
+                                       .Complete(
+                                         key = new MapKey(key),
+                                         exit = exitWithReleaser,
+                                         ownerCount = new AtomicInteger(1),
+                                         entryStats = EntryStats(now),
+                                         timeToLive = expiredAt
+                                       )
+                                     val previousValue = map.put(key, completedResult)
+                                     ZIO.succeed(
+                                       Managed.unwrap(cleanMapValue(previousValue).as(completedResult.toManaged))
                                      )
-                                   val previousValue = map.put(key, completedResult)
-                                   ZIO.succeed(
-                                     Managed.unwrap(cleanMapValue(previousValue).as(completedResult.toManaged))
-                                   )
-                                 case failure @ Exit.Failure(_) =>
-                                   val completedResult =
-                                     MapValue.Complete(
-                                       key = new MapKey(key),
-                                       exit = failure,
-                                       ownerCount = new AtomicInteger(0),
-                                       entryStats = EntryStats(now),
-                                       timeToLive = expiredAt
+                                   case failure @ Exit.Failure(_) =>
+                                     val completedResult =
+                                       MapValue.Complete(
+                                         key = new MapKey(key),
+                                         exit = failure,
+                                         ownerCount = new AtomicInteger(0),
+                                         entryStats = EntryStats(now),
+                                         timeToLive = expiredAt
+                                       )
+                                     val previousValue = map.put(key, completedResult)
+                                     release(failure) *> ZIO.succeed(
+                                       Managed.unwrap(cleanMapValue(previousValue).as(completedResult.toManaged))
                                      )
-                                   val previousValue = map.put(key, completedResult)
-                                   release(failure) *> ZIO.succeed(
-                                     Managed.unwrap(cleanMapValue(previousValue).as(completedResult.toManaged))
-                                   )
+                                 }
                                }
                              }
                              .memoize
