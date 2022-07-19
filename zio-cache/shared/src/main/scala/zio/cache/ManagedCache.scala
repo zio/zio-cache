@@ -9,7 +9,7 @@ import java.util
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
 
-sealed abstract class ManagedCache[-Key, +Error, +Value] {
+abstract class ManagedCache[-Key, +Error, +Value] {
 
   /**
    * Returns statistics for this cache.
