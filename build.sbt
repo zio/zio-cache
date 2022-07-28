@@ -37,13 +37,14 @@ addCommandAlias(
   ";zioCacheNative/test:compile"
 )
 
-val zioVersion = "1.0.12"
+val zioVersion = "1.0.16"
 
 lazy val root = project
   .in(file("."))
   .settings(
     publish / skip := true,
-    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
+    unusedCompileDependenciesFilter :=
+      unusedCompileDependenciesFilter.value - moduleFilter("org.scala-js", "scalajs-library")
   )
   .aggregate(
     zioCacheJVM,
@@ -61,7 +62,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .settings(
     libraryDependencies ++= Seq(
       "dev.zio"                %% "zio"                     % zioVersion,
-      "org.scala-lang.modules" %% "scala-collection-compat" % "2.7.0",
+      "org.scala-lang.modules" %% "scala-collection-compat" % "2.8.0",
       "dev.zio"                %% "zio-test"                % zioVersion % Test,
       "dev.zio"                %% "zio-test-sbt"            % zioVersion % Test
     )
