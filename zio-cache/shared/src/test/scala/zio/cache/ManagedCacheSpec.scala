@@ -498,7 +498,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                   (_: Exit[Nothing, Unit]) =>
                     10.second
                 }
-                .use { (managedCache: ManagedCache[Unit, Nothing, Unit]) =>
+                .use { (managedCache: ManagedCache[Unit, Any, Nothing, Unit]) =>
                   val subManaged = managedCache.get(())
                   for {
                     _                               <- subManaged.use_(ZIO.unit)
@@ -526,7 +526,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         .makeWith(10, ManagedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                           10.second
                         }
-                        .use { (managedCache: ManagedCache[Unit, Nothing, Unit]) =>
+                        .use { (managedCache: ManagedCache[Unit, Any, Nothing, Unit]) =>
                           val useGetManaged = managedCache.get(key = ()).use_(ZIO.unit)
                           for {
                             _                        <- useGetManaged
@@ -554,7 +554,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         .makeWith(10, ManagedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                           10.second
                         }
-                        .use { (managedCache: ManagedCache[Unit, Nothing, Unit]) =>
+                        .use { (managedCache: ManagedCache[Unit, Any, Nothing, Unit]) =>
                           for {
                             Reservation(acquire, release)   <- managedCache.get(()).reserve
                             _                               <- acquire
@@ -579,7 +579,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         .makeWith(10, ManagedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                           10.second
                         }
-                        .use { (managedCache: ManagedCache[Unit, Nothing, Unit]) =>
+                        .use { (managedCache: ManagedCache[Unit, Any, Nothing, Unit]) =>
                           for {
                             _            <- managedCache.get(key = ()).use_(ZIO.unit)
                             _            <- fakeClock.advance(9.second)
@@ -609,7 +609,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         .makeWith(10, ManagedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                           10.second
                         }
-                        .use { (managedCache: ManagedCache[Unit, Nothing, Unit]) =>
+                        .use { (managedCache: ManagedCache[Unit, Any, Nothing, Unit]) =>
                           for {
                             _            <- managedCache.get(key = ()).use_(ZIO.unit)
                             _            <- fakeClock.advance(11.second)
@@ -637,7 +637,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
                         .makeWith(10, ManagedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                           10.second
                         }
-                        .use { (managedCache: ManagedCache[Unit, Nothing, Unit]) =>
+                        .use { (managedCache: ManagedCache[Unit, Any, Nothing, Unit]) =>
                           for {
                             Reservation(acquire, release) <- managedCache.get(key = ()).reserve
                             _                             <- acquire
@@ -943,7 +943,7 @@ object ManagedCacheSpec extends DefaultRunnableSpec {
     }
 
     def applyResourceOperations[V](
-      managedCache: ManagedCache[Key, Throwable, V],
+      managedCache: ManagedCache[Key, Any, Throwable, V],
       resourceOperations: List[ResourceOperation],
       ignoreCacheError: Boolean = false
     ): IO[TestFailure[Nothing], Map[ResourceId, Releaser]] =
