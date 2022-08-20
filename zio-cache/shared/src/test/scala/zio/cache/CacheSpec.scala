@@ -135,6 +135,19 @@ object CacheSpec extends DefaultRunnableSpec {
         }
       }
     ),
+    suite("`add` method")(
+      testM("") {
+        checkM(Gen.anyInt) { salt =>
+          val indices = 1 to 10
+          for {
+            cache      <- Cache.make(capacity = 10, Duration.Infinity, Lookup(hash(salt)))
+            addResults <- ZIO.foreach(indices)(n => cache.add(n, n))
+            getResults <- ZIO.foreach(indices)(cache.get)
+          } yield assertTrue(addResults.toSet == Set(true)) &&
+            assertTrue(getResults.toList == indices.toList)
+        }
+      }
+    ),
     testM("size") {
       checkM(Gen.anyInt) { salt =>
         for {
