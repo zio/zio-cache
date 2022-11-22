@@ -1,6 +1,6 @@
 const sidebars = {
   sidebar: [
-    "index"
+    "index",
     "lookup",
     "cache",
     "cache-statistics",
