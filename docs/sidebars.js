@@ -4,7 +4,7 @@ const sidebars = {
     "lookup",
     "cache",
     "cache-statistics",
-    "entry_statistics"
+    "entry-statistics"
   ]
 };
 
