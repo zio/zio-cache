@@ -1,5 +1,5 @@
 ---
-id: overview_cache
+id: cache
 title: "Cache"
 ---
 
