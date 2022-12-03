@@ -1,5 +1,5 @@
 ---
-id: overview_entry_statistics
+id: entry-statistics
 title: "Entry Statistics"
 ---
 
