@@ -1,5 +1,5 @@
 ---
-id: overview_cache_statistics
+id: cache-statistics
 title: "Cache Statistics"
 ---
 

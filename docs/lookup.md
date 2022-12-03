@@ -1,5 +1,5 @@
 ---
-id: overview_lookup
+id: lookup
 title: "Lookup"
 ---
 

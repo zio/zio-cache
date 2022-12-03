@@ -1,6 +1,7 @@
 ---
-id: overview_index
-title: "Summary"
+id: index
+title: "Introduction to ZIO Cache"
+sidebar_label: "ZIO Cache"
 ---
 
 ZIO Cache makes it easy to cache values to optimize your application's performance.
@@ -44,5 +45,5 @@ If multiple concurrent processes get the value at the same time the value will o
 Include ZIO Cache in your project by adding the following to your `build.sbt` file:
 
 ```scala
-libraryDependencies += "dev.zio" %% "zio-cache" % zioCacheVersion
+libraryDependencies += "dev.zio" %% "zio-cache" % "@VERSION@" 
 ```
