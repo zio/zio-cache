@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
  * the same key the lookup function will only be computed once and the result
  * will be returned to all fibers.
  */
-sealed abstract class Cache[-Key, +Error, +Value] {
+abstract class Cache[-Key, +Error, +Value] {
 
   /**
    * Returns statistics for this cache.
