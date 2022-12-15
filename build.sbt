@@ -98,7 +98,15 @@ lazy val docs = project
     publish / skip := true,
     moduleName     := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
-    scalacOptions -= "-Xfatal-warnings"
+    scalacOptions -= "-Xfatal-warnings",
+    projectName := "ZIO Cache",
+    badgeInfo := Some(
+      BadgeInfo(
+        artifact = "zio-cache_2.12",
+        projectStage = ProjectStage.Development
+      )
+    ),
+    docsPublishBranch := "zio2"
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
