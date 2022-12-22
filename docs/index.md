@@ -37,7 +37,7 @@ A cache is defined in terms of a lookup function that describes how to compute t
 ```scala mdoc:silent
 import zio._
 
-trait Lookup[-Key, -Environment, +E, +A] {
+trait Lookup[-Key, -R, +E, +A] {
   def lookup(key: Key): ZIO[R, E, A]
 }
 ```
