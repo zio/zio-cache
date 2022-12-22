@@ -549,7 +549,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                     (_: Exit[Nothing, Unit]) =>
                       10.second
                   }
-                  .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
+                  .flatMap { (scopedCache: ScopedCache[Unit, Any, Nothing, Unit]) =>
                     val subManaged = scopedCache.get(())
                     for {
                       _                               <- ZIO.scoped(subManaged.unit)
@@ -579,7 +579,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                           .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
-                          .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
+                          .flatMap { (scopedCache: ScopedCache[Unit, Any, Nothing, Unit]) =>
                             val useGetManaged = ZIO.scoped(scopedCache.get(key = ()).unit)
                             for {
                               _             <- useGetManaged
@@ -610,7 +610,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                           .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
-                          .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
+                          .flatMap { (scopedCache: ScopedCache[Unit, Any, Nothing, Unit]) =>
                             for {
                               scope                           <- Scope.make
                               acquire                          = scopedCache.get(()).provideEnvironment(ZEnvironment(scope))
@@ -639,7 +639,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                           .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
-                          .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
+                          .flatMap { (scopedCache: ScopedCache[Unit, Any, Nothing, Unit]) =>
                             for {
                               _            <- ZIO.scoped(scopedCache.get(key = ()).unit)
                               _            <- fakeClock.advance(9.second)
@@ -672,7 +672,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                           .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
-                          .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
+                          .flatMap { (scopedCache: ScopedCache[Unit, Any, Nothing, Unit]) =>
                             for {
                               _            <- ZIO.scoped(scopedCache.get(key = ()).unit)
                               _            <- fakeClock.advance(11.second)
@@ -703,7 +703,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                           .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
-                          .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
+                          .flatMap { (scopedCache: ScopedCache[Unit, Any, Nothing, Unit]) =>
                             for {
                               scope                      <- Scope.make
                               acquire                     = scopedCache.get(key = ()).provideEnvironment(ZEnvironment(scope))
@@ -1019,7 +1019,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
     }
 
     def applyResourceOperations[V](
-      scopedCache: ScopedCache[Key, Throwable, V],
+      scopedCache: ScopedCache[Key, Any, Throwable, V],
       resourceOperations: List[ResourceOperation],
       ignoreCacheError: Boolean = false
     ): IO[TestFailure[Nothing], Map[ResourceId, Releaser]] =

@@ -24,7 +24,7 @@ import java.util
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
 
-abstract class ScopedCache[-Key, +Error, +Value] {
+abstract class ScopedCache[-Key, -Environment, +Error, +Value] {
 
   /**
    * Returns statistics for this cache.
@@ -52,7 +52,7 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * @param key
    * @return
    */
-  def get(key: Key): ZIO[Scope, Error, Value]
+  def get(key: Key): ZIO[Scope with Environment, Error, Value]
 
   /**
    * Force the reuse of the lookup function to compute the returned scoped effect associated with the specified key immediately
@@ -61,7 +61,7 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * @param key
    * @return
    */
-  def refresh(key: Key): IO[Error, Unit]
+  def refresh(key: Key): ZIO[Environment, Error, Unit]
 
   /**
    * Invalidates the resource associated with the specified key.
@@ -84,244 +84,324 @@ object ScopedCache {
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function.
    */
-  def make[Key, Environment, Error, Value](
+  def make[Key, Environment: Tag, Error, Value](
     capacity: Int,
     timeToLive: Duration,
     lookup: ScopedLookup[Key, Environment, Error, Value]
-  ): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+  ): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Any, Error, Value]] =
     makeWith(capacity, lookup)(_ => timeToLive)
+
+  /**
+   * TODO JULES
+   */
+  def makeLazy[Key, Environment, Error, Value](
+    capacity: Int,
+    timeToLive: Duration,
+    lookup: ScopedLookup[Key, Environment, Error, Value]
+  ): ZIO[Scope, Nothing, ScopedCache[Key, Environment, Error, Value]] =
+    makeWithLazy(capacity, lookup)(_ => timeToLive)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function, where the time to live can depend on the `Exit` value
    * returned by the lookup function.
    */
-  def makeWith[Key, Environment, Error, Value](
+  def makeWith[Key, Environment: Tag, Error, Value](
     capacity: Int,
     scopedLookup: ScopedLookup[Key, Environment, Error, Value]
-  )(timeToLive: Exit[Error, Value] => Duration): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+  )(
+    timeToLive: Exit[Error, Value] => Duration
+  ): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Any, Error, Value]] =
     makeWith(capacity, scopedLookup, Clock.systemUTC())(timeToLive)
 
+  /**
+   * TODO JULES
+   */
+  def makeWithLazy[Key, Environment, Error, Value](
+    capacity: Int,
+    scopedLookup: ScopedLookup[Key, Environment, Error, Value]
+  )(
+    timeToLive: Exit[Error, Value] => Duration
+  ): ZIO[Scope, Nothing, ScopedCache[Key, Environment, Error, Value]] =
+    makeWithLazy(capacity, scopedLookup, Clock.systemUTC())(timeToLive)
+
   //util for test because it allow to inject a mocked Clock
-  private[cache] def makeWith[Key, Environment, Error, Value](
+  private[cache] def makeWith[Key, Environment: Tag, Error, Value](
     capacity: Int,
     scopedLookup: ScopedLookup[Key, Environment, Error, Value],
     clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+  )(
+    timeToLive: Exit[Error, Value] => Duration
+  ): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Any, Error, Value]] =
     ZIO.acquireRelease(buildWith(capacity, scopedLookup, clock)(timeToLive))(_.invalidateAll)
 
-  private def buildWith[Key, Environment, Error, Value](
+  //util for test because it allow to inject a mocked Clock
+  private[cache] def makeWithLazy[Key, Environment, Error, Value](
     capacity: Int,
     scopedLookup: ScopedLookup[Key, Environment, Error, Value],
     clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment, ScopedCache[Key, Error, Value]] =
-    ZIO.environment[Environment].map { environment =>
-      val cacheState = CacheState.initial[Key, Error, Value]()
-      import cacheState._
+  )(
+    timeToLive: Exit[Error, Value] => Duration
+  ): ZIO[Scope, Nothing, ScopedCache[Key, Environment, Error, Value]] =
+    ZIO
+      .acquireRelease(
+        ZIO.succeed(buildWithLazy(capacity, scopedLookup, clock)(timeToLive))
+      )(_.invalidateAll)
 
-      def trackAccess(key: MapKey[Key]): Array[MapValue[Key, Error, Value]] = {
-        val cleanedKey = scala.collection.mutable.ArrayBuilder.make[MapValue[Key, Error, Value]]
-        accesses.offer(key)
-        if (updating.compareAndSet(false, true)) {
-          var loop = true
-          while (loop) {
-            val key = accesses.poll(null)
-            if (key ne null) {
-              keys.add(key)
-            } else {
-              loop = false
-            }
-          }
-          var size = map.size
-          loop = size > capacity
-          while (loop) {
-            val key = keys.remove()
-            if (key ne null) {
-              val removed = map.remove(key.value)
-              if (removed ne null) {
-                size -= 1
-                cleanedKey += removed
-                loop = size > capacity
-              }
-            } else {
-              loop = false
-            }
-          }
-          updating.set(false)
-        }
-        cleanedKey.result()
-      }
+  private def buildWithLazy[Key, Environment, Error, Value](
+    capacity: Int,
+    scopedLookup: ScopedLookup[Key, Environment, Error, Value],
+    clock: Clock
+  )(timeToLive: Exit[Error, Value] => Duration): ScopedCache[Key, Environment, Error, Value] =
+    doBuild(capacity, scopedLookup, clock)(timeToLive)
 
-      def trackHit(): Unit =
-        hits.increment()
+  private def buildWith[Key, Environment: Tag, Error, Value](
+    capacity: Int,
+    scopedLookup: ScopedLookup[Key, Environment, Error, Value],
+    clock: Clock
+  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment, ScopedCache[Key, Any, Error, Value]] =
+    ZIO.environment[Environment].map { env =>
+      val cache: ScopedCache[Key, Environment, Error, Value] = doBuild(capacity, scopedLookup, clock)(timeToLive)
 
-      def trackMiss(): Unit =
-        misses.increment()
+      new ScopedCache[Key, Any, Error, Value] {
+        override def cacheStats: UIO[CacheStats] = cache.cacheStats
 
-      new ScopedCache[Key, Error, Value] {
-        private def ensureMapSizeNotExceeded(key: MapKey[Key]): UIO[Unit] =
-          ZIO.foreachParDiscard(trackAccess(key)) { cleanedMapValue =>
-            cleanMapValue(cleanedMapValue)
-          }
+        override def contains(key: Key): UIO[Boolean] = cache.contains(key)
 
-        override def cacheStats: UIO[CacheStats] =
-          ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
+        override def entryStats(key: Key): UIO[Option[EntryStats]] = cache.entryStats(key)
 
-        override def contains(k: Key): UIO[Boolean] =
-          ZIO.succeed(map.containsKey(k))
+        override def get(key: Key): ZIO[Scope, Error, Value] =
+          cache
+            .get(key)
+            .provideSomeEnvironment[Scope](scope => (scope ++ env).asInstanceOf[ZEnvironment[Scope with Environment]])
 
-        override def entryStats(k: Key): UIO[Option[EntryStats]] =
-          ZIO.succeed {
-            val value = map.get(k)
-            if (value eq null) None
-            else {
-              value match {
-                case MapValue.Pending(_, _) =>
-                  None
-                case MapValue.Complete(_, _, _, entryState, _) =>
-                  Option(EntryStats(entryState.loaded))
-                case MapValue.Refreshing(_, MapValue.Complete(_, _, _, entryState, _)) =>
-                  Option(EntryStats(entryState.loaded))
-              }
-            }
-          }
+        override def refresh(key: Key): ZIO[Any, Error, Unit] = cache.refresh(key).provideEnvironment(env)
 
-        override def get(k: Key): ZIO[Scope, Error, Value] =
-          lookupValueOf(k).memoize.flatMap { lookupValue =>
-            ZIO.suspendSucceed {
-              var key: MapKey[Key] = null
-              var value            = map.get(k)
-              if (value eq null) {
-                key = new MapKey(k)
-                value = map.putIfAbsent(k, MapValue.Pending(key, lookupValue))
-              }
-              if (value eq null) {
-                trackMiss()
-                ensureMapSizeNotExceeded(key) *> lookupValue
-              } else {
-                value match {
-                  case MapValue.Pending(key, scoped) =>
-                    trackHit()
-                    ensureMapSizeNotExceeded(key) *> scoped
-                  case complete @ MapValue.Complete(key, _, _, _, timeToLive) =>
-                    trackHit()
-                    if (hasExpired(timeToLive)) {
-                      map.remove(k, value)
-                      ensureMapSizeNotExceeded(key) *> complete.releaseOwner *> ZIO.succeed(get(k))
-                    } else {
-                      ensureMapSizeNotExceeded(key).as(complete.toScoped)
-                    }
-                  case MapValue.Refreshing(promiseInProgress, complete @ MapValue.Complete(mapKey, _, _, _, ttl)) =>
-                    trackHit()
-                    if (hasExpired(ttl)) {
-                      ensureMapSizeNotExceeded(mapKey) *> promiseInProgress
-                    } else {
-                      ensureMapSizeNotExceeded(mapKey).as(complete.toScoped)
-                    }
-                }
-              }
-            }
-          }.flatten
+        override def invalidate(key: Key): UIO[Unit] = cache.invalidate(key)
 
-        override def refresh(k: Key): IO[Error, Unit] = lookupValueOf(k).memoize.flatMap { scoped =>
-          var value               = map.get(k)
-          var newKey: MapKey[Key] = null
-          if (value eq null) {
-            newKey = new MapKey[Key](k)
-            value = map.putIfAbsent(k, MapValue.Pending(newKey, scoped))
-          }
-          val finalScoped = if (value eq null) {
-            ensureMapSizeNotExceeded(newKey) *> scoped
-          } else {
-            value match {
-              case MapValue.Pending(_, scopedEffect) =>
-                scopedEffect
-              case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
-                if (hasExpired(ttl)) {
-                  ZIO.succeed(get(k))
-                } else {
-                  if (map.replace(k, completeResult, MapValue.Refreshing(scoped, completeResult))) {
-                    scoped
-                  } else {
-                    ZIO.succeed(get(k))
-                  }
-                }
-              case MapValue.Refreshing(scoped, _) => scoped
-            }
-          }
-          finalScoped.flatMap(s => ZIO.scoped(s.unit))
-        }
+        override def invalidateAll: UIO[Unit] = cache.invalidateAll
 
-        override def invalidate(k: Key): UIO[Unit] = ZIO.suspendSucceed {
-          map.remove(k) match {
-            case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
-            case MapValue.Refreshing(_, complete)            => complete.releaseOwner
-            case _                                           => ZIO.unit
-          }
-        }
-
-        override def invalidateAll: UIO[Unit] =
-          ZIO.foreachParDiscard(map.keySet().asScala)(invalidate)
-
-        override def size: UIO[Int] =
-          ZIO.succeed(map.size)
-
-        private def cleanMapValue(mapValue: MapValue[Key, Error, Value]): UIO[Unit] =
-          mapValue match {
-            case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
-            case MapValue.Refreshing(_, complete)            => complete.releaseOwner
-            case _                                           => ZIO.unit
-          }
-
-        private def lookupValueOf(key: Key): UIO[ZIO[Scope, Error, Value]] = for {
-          scopedEffect <- (for {
-                            scope <- Scope.make
-                            exit <- scopedLookup(key)
-                                      .provideEnvironment(environment.add[Scope](scope))
-                                      .exit
-                          } yield (exit, scope.close(_)))
-                            .onInterrupt(ZIO.succeed(map.remove(key)))
-                            .flatMap { case (exit, release) =>
-                              val now       = Instant.now(clock)
-                              val expiredAt = now.plus(timeToLive(exit))
-                              exit match {
-                                case Exit.Success(value) =>
-                                  val exitWithReleaser: Exit[Nothing, (Value, Finalizer)] =
-                                    Exit.succeed(value -> release)
-                                  val completedResult = MapValue
-                                    .Complete(
-                                      key = new MapKey(key),
-                                      exit = exitWithReleaser,
-                                      ownerCount = new AtomicInteger(1),
-                                      entryStats = EntryStats(now),
-                                      timeToLive = expiredAt
-                                    )
-                                  val previousValue = map.put(key, completedResult)
-                                  ZIO.succeed(
-                                    cleanMapValue(previousValue).as(completedResult.toScoped).flatten
-                                  )
-                                case failure @ Exit.Failure(_) =>
-                                  val completedResult =
-                                    MapValue.Complete(
-                                      key = new MapKey(key),
-                                      exit = failure,
-                                      ownerCount = new AtomicInteger(0),
-                                      entryStats = EntryStats(now),
-                                      timeToLive = expiredAt
-                                    )
-                                  val previousValue = map.put(key, completedResult)
-                                  release(failure) *> ZIO.succeed(
-                                    cleanMapValue(previousValue).as(completedResult.toScoped).flatten
-                                  )
-                              }
-                            }
-                            .memoize
-        } yield scopedEffect.flatten
-
-        private def hasExpired(timeToLive: Instant) =
-          Instant.now(clock).isAfter(timeToLive)
+        override def size: UIO[RuntimeFlags] = cache.size
       }
     }
+
+  private def doBuild[Key, Environment, Error, Value](
+    capacity: Int,
+    scopedLookup: ScopedLookup[Key, Environment, Error, Value],
+    clock: Clock
+  )(timeToLive: Exit[Error, Value] => Duration): ScopedCache[Key, Environment, Error, Value] = {
+    val cacheState = CacheState.initial[Key, Environment, Error, Value]()
+    import cacheState._
+
+    def trackAccess(key: MapKey[Key]): Array[MapValue[Key, Environment, Error, Value]] = {
+      val cleanedKey = scala.collection.mutable.ArrayBuilder.make[MapValue[Key, Environment, Error, Value]]
+      accesses.offer(key)
+      if (updating.compareAndSet(false, true)) {
+        var loop = true
+        while (loop) {
+          val key = accesses.poll(null)
+          if (key ne null) {
+            keys.add(key)
+          } else {
+            loop = false
+          }
+        }
+        var size = map.size
+        loop = size > capacity
+        while (loop) {
+          val key = keys.remove()
+          if (key ne null) {
+            val removed = map.remove(key.value)
+            if (removed ne null) {
+              size -= 1
+              cleanedKey += removed
+              loop = size > capacity
+            }
+          } else {
+            loop = false
+          }
+        }
+        updating.set(false)
+      }
+      cleanedKey.result()
+    }
+
+    def trackHit(): Unit =
+      hits.increment()
+
+    def trackMiss(): Unit =
+      misses.increment()
+
+    new ScopedCache[Key, Environment, Error, Value] {
+      private def ensureMapSizeNotExceeded(key: MapKey[Key]): UIO[Unit] =
+        ZIO.foreachParDiscard(trackAccess(key)) { cleanedMapValue =>
+          cleanMapValue(cleanedMapValue)
+        }
+
+      override def cacheStats: UIO[CacheStats] =
+        ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
+
+      override def contains(k: Key): UIO[Boolean] =
+        ZIO.succeed(map.containsKey(k))
+
+      override def entryStats(k: Key): UIO[Option[EntryStats]] =
+        ZIO.succeed {
+          val value = map.get(k)
+          if (value eq null) None
+          else {
+            value match {
+              case MapValue.Pending(_, _) =>
+                None
+              case MapValue.Complete(_, _, _, entryState, _) =>
+                Option(EntryStats(entryState.loaded))
+              case MapValue.Refreshing(_, MapValue.Complete(_, _, _, entryState, _)) =>
+                Option(EntryStats(entryState.loaded))
+            }
+          }
+        }
+
+      override def get(k: Key): ZIO[Environment with Scope, Error, Value] =
+        lookupValueOf(k).memoize.flatMap { lookupValue =>
+          ZIO.suspendSucceed {
+            var key: MapKey[Key] = null
+            var value            = map.get(k)
+            if (value eq null) {
+              key = new MapKey(k)
+              value = map.putIfAbsent(k, MapValue.Pending[Key, Environment, Error, Value](key, lookupValue))
+            }
+            if (value eq null) {
+              trackMiss()
+              ensureMapSizeNotExceeded(key) *> lookupValue
+            } else {
+              value match {
+                case MapValue.Pending(key, scoped) =>
+                  trackHit()
+                  ensureMapSizeNotExceeded(key) *> scoped
+                case complete @ MapValue.Complete(key, _, _, _, timeToLive) =>
+                  trackHit()
+                  if (hasExpired(timeToLive)) {
+                    map.remove(k, value)
+                    ensureMapSizeNotExceeded(key) *> complete.releaseOwner *> ZIO.succeed(get(k))
+                  } else {
+                    ensureMapSizeNotExceeded(key).as(complete.toScoped)
+                  }
+                case MapValue.Refreshing(promiseInProgress, complete @ MapValue.Complete(mapKey, _, _, _, ttl)) =>
+                  trackHit()
+                  if (hasExpired(ttl)) {
+                    ensureMapSizeNotExceeded(mapKey) *> promiseInProgress
+                  } else {
+                    ensureMapSizeNotExceeded(mapKey).as(complete.toScoped)
+                  }
+              }
+            }
+          }
+        }.flatten
+
+      override def refresh(k: Key): ZIO[Environment, Error, Unit] = lookupValueOf(k).memoize.flatMap { scoped =>
+        var value               = map.get(k)
+        var newKey: MapKey[Key] = null
+        if (value eq null) {
+          newKey = new MapKey[Key](k)
+          value = map.putIfAbsent(k, MapValue.Pending[Key, Environment, Error, Value](newKey, scoped))
+        }
+        val finalScoped = if (value eq null) {
+          ensureMapSizeNotExceeded(newKey) *> scoped
+        } else {
+          value match {
+            case MapValue.Pending(_, scopedEffect) =>
+              scopedEffect
+            case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
+              if (hasExpired(ttl)) {
+                ZIO.succeed(get(k))
+              } else {
+                if (
+                  map.replace(
+                    k,
+                    completeResult,
+                    MapValue.Refreshing[Key, Environment, Error, Value](scoped, completeResult)
+                  )
+                ) {
+                  scoped
+                } else {
+                  ZIO.succeed(get(k))
+                }
+              }
+            case MapValue.Refreshing(scoped, _) => scoped
+          }
+        }
+        finalScoped.flatMap(s => ZIO.scoped[Environment](s.unit))
+      }
+
+      override def invalidate(k: Key): UIO[Unit] = ZIO.suspendSucceed {
+        map.remove(k) match {
+          case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
+          case MapValue.Refreshing(_, complete)            => complete.releaseOwner
+          case _                                           => ZIO.unit
+        }
+      }
+
+      override def invalidateAll: UIO[Unit] =
+        ZIO.foreachParDiscard(map.keySet().asScala)(invalidate)
+
+      override def size: UIO[Int] =
+        ZIO.succeed(map.size)
+
+      private def cleanMapValue(mapValue: MapValue[Key, Environment, Error, Value]): UIO[Unit] =
+        mapValue match {
+          case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
+          case MapValue.Refreshing(_, complete)            => complete.releaseOwner
+          case _                                           => ZIO.unit
+        }
+
+      private def lookupValueOf(key: Key): UIO[ZIO[Environment with Scope, Error, Value]] = for {
+        scopedEffect <- (for {
+                          scope <- Scope.make
+                          exit <- scopedLookup(key)
+                                    .provideSomeEnvironment[Environment](_.add[Scope](scope))
+                                    .exit
+                        } yield (exit, scope.close(_)))
+                          .onInterrupt(ZIO.succeed(map.remove(key)))
+                          .flatMap { case (exit, release) =>
+                            val now       = Instant.now(clock)
+                            val expiredAt = now.plus(timeToLive(exit))
+                            exit match {
+                              case Exit.Success(value) =>
+                                val exitWithReleaser: Exit[Nothing, (Value, Finalizer)] =
+                                  Exit.succeed(value -> release)
+                                val completedResult = MapValue
+                                  .Complete(
+                                    key = new MapKey(key),
+                                    exit = exitWithReleaser,
+                                    ownerCount = new AtomicInteger(1),
+                                    entryStats = EntryStats(now),
+                                    timeToLive = expiredAt
+                                  )
+                                val previousValue = map.put(key, completedResult)
+                                ZIO.succeed(
+                                  cleanMapValue(previousValue).as(completedResult.toScoped).flatten
+                                )
+                              case failure @ Exit.Failure(_) =>
+                                val completedResult =
+                                  MapValue.Complete(
+                                    key = new MapKey(key),
+                                    exit = failure,
+                                    ownerCount = new AtomicInteger(0),
+                                    entryStats = EntryStats(now),
+                                    timeToLive = expiredAt
+                                  )
+                                val previousValue = map.put(key, completedResult)
+                                release(failure) *> ZIO.succeed(
+                                  cleanMapValue(previousValue).as(completedResult.toScoped).flatten
+                                )
+                            }
+                          }
+                          .memoize
+      } yield scopedEffect.flatten
+
+      private def hasExpired(timeToLive: Instant) =
+        Instant.now(clock).isAfter(timeToLive)
+    }
+  }
 
   /**
    * A `MapValue` represents a value in the cache. A value may either be
@@ -329,21 +409,21 @@ object ScopedCache {
    * lookup function, when it is available, or `Complete` with an `Exit` value
    * that contains the result of computing the lookup function.
    */
-  private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable
+  private sealed trait MapValue[Key, -Environment, +Error, +Value] extends Product with Serializable
 
   private object MapValue {
-    final case class Pending[Key, Error, Value](
+    final case class Pending[Key, -Environment, +Error, +Value](
       key: MapKey[Key],
-      scoped: UIO[ZIO[Scope, Error, Value]]
-    ) extends MapValue[Key, Error, Value]
+      scoped: UIO[ZIO[Environment with Scope, Error, Value]]
+    ) extends MapValue[Key, Environment, Error, Value]
 
-    final case class Complete[Key, +Error, +Value](
+    final case class Complete[Key, -Environment, +Error, +Value](
       key: MapKey[Key],
       exit: Exit[Error, (Value, Finalizer)],
       ownerCount: AtomicInteger,
       entryStats: EntryStats,
       timeToLive: Instant
-    ) extends MapValue[Key, Error, Value] {
+    ) extends MapValue[Key, Environment, Error, Value] {
       def toScoped: ZIO[Scope, Error, Value] =
         exit.foldExit(
           cause => ZIO.done(Exit.Failure(cause)),
@@ -365,17 +445,17 @@ object ScopedCache {
         )
     }
 
-    final case class Refreshing[Key, Error, Value](
-      scopedEffect: UIO[ZIO[Scope, Error, Value]],
-      complete: Complete[Key, Error, Value]
-    ) extends MapValue[Key, Error, Value]
+    final case class Refreshing[Key, -Environment, +Error, +Value](
+      scopedEffect: UIO[ZIO[Environment with Scope, Error, Value]],
+      complete: Complete[Key, Environment, Error, Value]
+    ) extends MapValue[Key, Environment, Error, Value]
   }
 
   /**
    * The `CacheState` represents the mutable state underlying the cache.
    */
-  private final case class CacheState[Key, Error, Value](
-    map: util.Map[Key, MapValue[Key, Error, Value]],
+  private final case class CacheState[Key, Environment, Error, Value](
+    map: util.Map[Key, MapValue[Key, Environment, Error, Value]],
     keys: KeySet[Key],
     accesses: MutableConcurrentQueue[MapKey[Key]],
     hits: LongAdder,
@@ -388,9 +468,9 @@ object ScopedCache {
     /**
      * Constructs an initial cache state.
      */
-    def initial[Key, Error, Value](): CacheState[Key, Error, Value] =
+    def initial[Key, Environment, Error, Value](): CacheState[Key, Environment, Error, Value] =
       CacheState(
-        Platform.newConcurrentMap,
+        Platform.newConcurrentMap[Key, MapValue[Key, Environment, Error, Value]],
         new KeySet,
         MutableConcurrentQueue.unbounded,
         new LongAdder,
