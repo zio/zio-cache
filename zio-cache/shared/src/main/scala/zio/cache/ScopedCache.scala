@@ -8,7 +8,7 @@ import java.util
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
 
-abstract class ScopedCache[-Key, +Error, +Value] {
+abstract class ScopedCache[-Key, +E, +A] {
 
   /**
    * Returns statistics for this cache.
@@ -36,7 +36,7 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * @param key
    * @return
    */
-  def get(key: Key): ZIO[Scope, Error, Value]
+  def get(key: Key): ZIO[Scope, E, A]
 
   /**
    * Force the reuse of the lookup function to compute the returned scoped effect associated with the specified key immediately
@@ -45,7 +45,7 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * @param key
    * @return
    */
-  def refresh(key: Key): IO[Error, Unit]
+  def refresh(key: Key): IO[E, Unit]
 
   /**
    * Invalidates the resource associated with the specified key.
@@ -68,11 +68,11 @@ object ScopedCache {
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function.
    */
-  def make[Key, Environment, Error, Value](
+  def make[Key, R, E, A](
     capacity: Int,
     timeToLive: Duration,
-    lookup: ScopedLookup[Key, Environment, Error, Value]
-  ): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+    lookup: ScopedLookup[Key, R, E, A]
+  ): ZIO[R with Scope, Nothing, ScopedCache[Key, E, A]] =
     makeWith(capacity, lookup)(_ => timeToLive)
 
   /**
@@ -80,31 +80,31 @@ object ScopedCache {
    * lookup function, where the time to live can depend on the `Exit` value
    * returned by the lookup function.
    */
-  def makeWith[Key, Environment, Error, Value](
+  def makeWith[Key, R, E, A](
     capacity: Int,
-    scopedLookup: ScopedLookup[Key, Environment, Error, Value]
-  )(timeToLive: Exit[Error, Value] => Duration): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+    scopedLookup: ScopedLookup[Key, R, E, A]
+  )(timeToLive: Exit[E, A] => Duration): ZIO[R with Scope, Nothing, ScopedCache[Key, E, A]] =
     makeWith(capacity, scopedLookup, Clock.systemUTC())(timeToLive)
 
   //util for test because it allow to inject a mocked Clock
-  private[cache] def makeWith[Key, Environment, Error, Value](
+  private[cache] def makeWith[Key, R, E, A](
     capacity: Int,
-    scopedLookup: ScopedLookup[Key, Environment, Error, Value],
+    scopedLookup: ScopedLookup[Key, R, E, A],
     clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+  )(timeToLive: Exit[E, A] => Duration): ZIO[R with Scope, Nothing, ScopedCache[Key, E, A]] =
     ZIO.acquireRelease(buildWith(capacity, scopedLookup, clock)(timeToLive))(_.invalidateAll)
 
-  private def buildWith[Key, Environment, Error, Value](
+  private def buildWith[Key, R, E, A](
     capacity: Int,
-    scopedLookup: ScopedLookup[Key, Environment, Error, Value],
+    scopedLookup: ScopedLookup[Key, R, E, A],
     clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment, ScopedCache[Key, Error, Value]] =
-    ZIO.environment[Environment].map { environment =>
-      val cacheState = CacheState.initial[Key, Error, Value]()
+  )(timeToLive: Exit[E, A] => Duration): URIO[R, ScopedCache[Key, E, A]] =
+    ZIO.environment[R].map { environment =>
+      val cacheState = CacheState.initial[Key, E, A]()
       import cacheState._
 
-      def trackAccess(key: MapKey[Key]): Array[MapValue[Key, Error, Value]] = {
-        val cleanedKey = scala.collection.mutable.ArrayBuilder.make[MapValue[Key, Error, Value]]
+      def trackAccess(key: MapKey[Key]): Array[MapValue[Key, E, A]] = {
+        val cleanedKey = scala.collection.mutable.ArrayBuilder.make[MapValue[Key, E, A]]
         accesses.offer(key)
         if (updating.compareAndSet(false, true)) {
           var loop = true
@@ -142,7 +142,7 @@ object ScopedCache {
       def trackMiss(): Unit =
         misses.increment()
 
-      new ScopedCache[Key, Error, Value] {
+      new ScopedCache[Key, E, A] {
         private def ensureMapSizeNotExceeded(key: MapKey[Key]): UIO[Unit] =
           ZIO.foreachParDiscard(trackAccess(key)) { cleanedMapValue =>
             cleanMapValue(cleanedMapValue)
@@ -170,7 +170,7 @@ object ScopedCache {
             }
           }
 
-        override def get(k: Key): ZIO[Scope, Error, Value] =
+        override def get(k: Key): ZIO[Scope, E, A] =
           lookupValueOf(k).memoize.flatMap { lookupValue =>
             ZIO.suspendSucceed {
               var key: MapKey[Key] = null
@@ -207,7 +207,7 @@ object ScopedCache {
             }
           }.flatten
 
-        override def refresh(k: Key): IO[Error, Unit] = lookupValueOf(k).memoize.flatMap { scoped =>
+        override def refresh(k: Key): IO[E, Unit] = lookupValueOf(k).memoize.flatMap { scoped =>
           var value               = map.get(k)
           var newKey: MapKey[Key] = null
           if (value eq null) {
@@ -250,14 +250,14 @@ object ScopedCache {
         override def size: UIO[Int] =
           ZIO.succeed(map.size)
 
-        private def cleanMapValue(mapValue: MapValue[Key, Error, Value]): UIO[Unit] =
+        private def cleanMapValue(mapValue: MapValue[Key, E, A]): UIO[Unit] =
           mapValue match {
             case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
             case MapValue.Refreshing(_, complete)            => complete.releaseOwner
             case _                                           => ZIO.unit
           }
 
-        private def lookupValueOf(key: Key): UIO[ZIO[Scope, Error, Value]] = for {
+        private def lookupValueOf(key: Key): UIO[ZIO[Scope, E, A]] = for {
           scopedEffect <- (for {
                             scope <- Scope.make
                             exit <- scopedLookup(key)
@@ -270,7 +270,7 @@ object ScopedCache {
                               val expiredAt = now.plus(timeToLive(exit))
                               exit match {
                                 case Exit.Success(value) =>
-                                  val exitWithReleaser: Exit[Nothing, (Value, Finalizer)] =
+                                  val exitWithReleaser: Exit[Nothing, (A, Finalizer)] =
                                     Exit.succeed(value -> release)
                                   val completedResult = MapValue
                                     .Complete(
@@ -313,22 +313,22 @@ object ScopedCache {
    * lookup function, when it is available, or `Complete` with an `Exit` value
    * that contains the result of computing the lookup function.
    */
-  private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable
+  private sealed trait MapValue[Key, +E, +A] extends Product with Serializable
 
   private object MapValue {
-    final case class Pending[Key, Error, Value](
+    final case class Pending[Key, E, A](
       key: MapKey[Key],
-      scoped: UIO[ZIO[Scope, Error, Value]]
-    ) extends MapValue[Key, Error, Value]
+      scoped: UIO[ZIO[Scope, E, A]]
+    ) extends MapValue[Key, E, A]
 
-    final case class Complete[Key, +Error, +Value](
+    final case class Complete[Key, +E, +A](
       key: MapKey[Key],
-      exit: Exit[Error, (Value, Finalizer)],
+      exit: Exit[E, (A, Finalizer)],
       ownerCount: AtomicInteger,
       entryStats: EntryStats,
       timeToLive: Instant
-    ) extends MapValue[Key, Error, Value] {
-      def toScoped: ZIO[Scope, Error, Value] =
+    ) extends MapValue[Key, E, A] {
+      def toScoped: ZIO[Scope, E, A] =
         exit.foldExit(
           cause => ZIO.done(Exit.Failure(cause)),
           { case (value, _) =>
@@ -349,17 +349,17 @@ object ScopedCache {
         )
     }
 
-    final case class Refreshing[Key, Error, Value](
-      scopedEffect: UIO[ZIO[Scope, Error, Value]],
-      complete: Complete[Key, Error, Value]
-    ) extends MapValue[Key, Error, Value]
+    final case class Refreshing[Key, E, A](
+      scopedEffect: UIO[ZIO[Scope, E, A]],
+      complete: Complete[Key, E, A]
+    ) extends MapValue[Key, E, A]
   }
 
   /**
    * The `CacheState` represents the mutable state underlying the cache.
    */
-  private final case class CacheState[Key, Error, Value](
-    map: util.Map[Key, MapValue[Key, Error, Value]],
+  private final case class CacheState[Key, E, A](
+    map: util.Map[Key, MapValue[Key, E, A]],
     keys: KeySet[Key],
     accesses: MutableConcurrentQueue[MapKey[Key]],
     hits: LongAdder,
@@ -372,7 +372,7 @@ object ScopedCache {
     /**
      * Constructs an initial cache state.
      */
-    def initial[Key, Error, Value](): CacheState[Key, Error, Value] =
+    def initial[Key, E, A](): CacheState[Key, E, A] =
       CacheState(
         Platform.newConcurrentMap,
         new KeySet,

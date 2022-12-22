@@ -26,7 +26,7 @@ import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
  * the same key the lookup function will only be computed once and the result
  * will be returned to all fibers.
  */
-abstract class Cache[-Key, +Error, +Value] {
+abstract class Cache[-Key, +E, +A] {
 
   /**
    * Returns statistics for this cache.
@@ -49,7 +49,7 @@ abstract class Cache[-Key, +Error, +Value] {
    * Otherwise computes the value with the lookup function, puts it in the
    * cache, and returns it.
    */
-  def get(key: Key)(implicit trace: Trace): IO[Error, Value]
+  def get(key: Key)(implicit trace: Trace): IO[E, A]
 
   /**
    * Computes the value associated with the specified key, with the lookup
@@ -60,7 +60,7 @@ abstract class Cache[-Key, +Error, +Value] {
    * by the lookup function. Additionally, `refresh` always triggers the
    * lookup function, disregarding the last `Error`.
    */
-  def refresh(key: Key): IO[Error, Unit]
+  def refresh(key: Key): IO[E, Unit]
 
   /**
    * Invalidates the value associated with the specified key.
@@ -84,11 +84,11 @@ object Cache {
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function.
    */
-  def make[Key, Environment, Error, Value](
+  def make[Key, R, E, A](
     capacity: Int,
     timeToLive: Duration,
-    lookup: Lookup[Key, Environment, Error, Value]
-  )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
+    lookup: Lookup[Key, R, E, A]
+  )(implicit trace: Trace): URIO[R, Cache[Key, E, A]] =
     makeWith(capacity, lookup)(_ => timeToLive)
 
   /**
@@ -96,16 +96,16 @@ object Cache {
    * lookup function, where the time to live can depend on the `Exit` value
    * returned by the lookup function.
    */
-  def makeWith[Key, Environment, Error, Value](
+  def makeWith[Key, R, E, A](
     capacity: Int,
-    lookup: Lookup[Key, Environment, Error, Value]
+    lookup: Lookup[Key, R, E, A]
   )(
-    timeToLive: Exit[Error, Value] => Duration
-  )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
+    timeToLive: Exit[E, A] => Duration
+  )(implicit trace: Trace): URIO[R, Cache[Key, E, A]] =
     ZIO.clock.flatMap { clock =>
-      ZIO.environment[Environment].flatMap { environment =>
+      ZIO.environment[R].flatMap { environment =>
         ZIO.fiberId.map { fiberId =>
-          val cacheState = CacheState.initial[Key, Error, Value]()
+          val cacheState = CacheState.initial[Key, E, A]()
           import cacheState._
 
           def trackAccess(key: MapKey[Key]): Unit = {
@@ -143,7 +143,7 @@ object Cache {
           def trackMiss(): Unit =
             misses.increment()
 
-          new Cache[Key, Error, Value] {
+          new Cache[Key, E, A] {
 
             override def cacheStats(implicit trace: Trace): UIO[CacheStats] =
               ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
@@ -167,11 +167,11 @@ object Cache {
                 }
               }
 
-            override def get(k: Key)(implicit trace: Trace): IO[Error, Value] =
+            override def get(k: Key)(implicit trace: Trace): IO[E, A] =
               ZIO.suspendSucceedUnsafe { implicit u =>
-                var key: MapKey[Key]               = null
-                var promise: Promise[Error, Value] = null
-                var value                          = map.get(k)
+                var key: MapKey[Key]       = null
+                var promise: Promise[E, A] = null
+                var value                  = map.get(k)
                 if (value eq null) {
                   promise = newPromise()
                   key = new MapKey(k)
@@ -211,7 +211,7 @@ object Cache {
                 }
               }
 
-            override def refresh(k: Key): IO[Error, Unit] =
+            override def refresh(k: Key): IO[E, Unit] =
               ZIO.suspendSucceedUnsafe { implicit u =>
                 val promise = newPromise()
                 var value   = map.get(k)
@@ -255,7 +255,7 @@ object Cache {
             def size(implicit trace: Trace): UIO[Int] =
               ZIO.succeed(map.size)
 
-            private def lookupValueOf(key: Key, promise: Promise[Error, Value]): IO[Error, Value] =
+            private def lookupValueOf(key: Key, promise: Promise[E, A]): IO[E, A] =
               lookup(key)
                 .provideEnvironment(environment)
                 .exit
@@ -269,7 +269,7 @@ object Cache {
                 .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
 
             private def newPromise()(implicit unsafe: Unsafe) =
-              Promise.unsafe.make[Error, Value](fiberId)
+              Promise.unsafe.make[E, A](fiberId)
 
             private def hasExpired(timeToLive: Instant)(implicit unsafe: Unsafe) =
               clock.unsafe.instant().isAfter(timeToLive)
@@ -284,32 +284,32 @@ object Cache {
    * lookup function, when it is available, or `Complete` with an `Exit` value
    * that contains the result of computing the lookup function.
    */
-  private sealed trait MapValue[Key, Error, Value] extends Product with Serializable
+  private sealed trait MapValue[Key, E, A] extends Product with Serializable
 
   private object MapValue {
-    final case class Pending[Key, Error, Value](
+    final case class Pending[Key, E, A](
       key: MapKey[Key],
-      promise: Promise[Error, Value]
-    ) extends MapValue[Key, Error, Value]
+      promise: Promise[E, A]
+    ) extends MapValue[Key, E, A]
 
-    final case class Complete[Key, Error, Value](
+    final case class Complete[Key, E, A](
       key: MapKey[Key],
-      exit: Exit[Error, Value],
+      exit: Exit[E, A],
       entryStats: EntryStats,
       timeToLive: Instant
-    ) extends MapValue[Key, Error, Value]
+    ) extends MapValue[Key, E, A]
 
-    final case class Refreshing[Key, Error, Value](
-      promise: Promise[Error, Value],
-      complete: Complete[Key, Error, Value]
-    ) extends MapValue[Key, Error, Value]
+    final case class Refreshing[Key, E, A](
+      promise: Promise[E, A],
+      complete: Complete[Key, E, A]
+    ) extends MapValue[Key, E, A]
   }
 
   /**
    * The `CacheState` represents the mutable state underlying the cache.
    */
-  private final case class CacheState[Key, Error, Value](
-    map: Map[Key, MapValue[Key, Error, Value]],
+  private final case class CacheState[Key, E, A](
+    map: Map[Key, MapValue[Key, E, A]],
     keys: KeySet[Key],
     accesses: MutableConcurrentQueue[MapKey[Key]],
     hits: LongAdder,
@@ -322,7 +322,7 @@ object Cache {
     /**
      * Constructs an initial cache state.
      */
-    def initial[Key, Error, Value](): CacheState[Key, Error, Value] =
+    def initial[Key, E, A](): CacheState[Key, E, A] =
       CacheState(
         Platform.newConcurrentMap,
         new KeySet,

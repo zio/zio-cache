@@ -8,19 +8,19 @@ A cache is defined in terms of a lookup function, a capacity, and a time to live
 ```scala mdoc
 import zio._
 
-trait Lookup[-Key, -Environment, +Error, +Value]
+trait Lookup[-Key, -R, +E, +A]
 
-trait Cache[-Key, +Error, +Value] {
-  def get(k: Key): IO[Error, Value]
+trait Cache[-Key, +E, +A] {
+  def get(k: Key): IO[E, A]
 }
 
 object Cache {
 
-  def make[Key, Environment, Error, Value](
+  def make[Key, R, E, A](
     capacity: Int,
     timeToLive: Duration,
-    lookup: Lookup[Key, Environment, Error, Value]
-  ): ZIO[Environment, Nothing, Cache[Key, Error, Value]] =
+    lookup: Lookup[Key, R, E, A]
+  ): ZIO[R, Nothing, Cache[Key, E, A]] =
     ???
 }
 ```
@@ -59,13 +59,13 @@ trait EntryStats
 ```
 
 ```scala mdoc:nest
-trait Cache[-Key, +Error, +Value] {
+trait Cache[-Key, +E, +A] {
   def cacheStats: UIO[CacheStats]
   def contains(key: Key): UIO[Boolean]
   def entryStats(key: Key): UIO[Option[EntryStats]]
   def invalidate(key: Key): UIO[Unit]
   def invalidateAll: UIO[Unit]
-  def refresh(key: Key): IO[Error, Unit]
+  def refresh(key: Key): IO[E, Unit]
   def size: UIO[Int]
 }
 ```

@@ -8,8 +8,8 @@ A `Lookup` is a lookup function that, given a key of type `Key`, knows how to co
 ```scala mdoc
 import zio._
 
-trait Lookup[-Key, -Environment, +Error, +Value] {
-  def lookup(key: Key): ZIO[Environment, Error, Value]
+trait Lookup[-Key, -R, +E, +A] {
+  def lookup(key: Key): ZIO[R, E, A]
 }
 ```
 
@@ -18,9 +18,9 @@ You can think of a key as essentially an effectual function to compute a value. 
 ```scala mdoc
 object Lookup {
 
-  def apply[Key, Environment, Error, Value](
-    f: Key => ZIO[Environment, Error, Value]
-  ): Lookup[Key, Environment, Error, Value] =
+  def apply[Key, R, E, A](
+    f: Key => ZIO[R, E, A]
+  ): Lookup[Key, R, E, A] =
     ???
 }
 ```

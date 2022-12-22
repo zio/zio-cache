@@ -9,7 +9,7 @@ object CacheSpec extends ZIOSpecDefault {
   def hash(x: Int): Int => UIO[Int] =
     y => ZIO.succeed((x ^ y).hashCode)
 
-  def spec: Spec[Environment, Any] = suite("CacheSpec")(
+  def spec: Spec[TestEnvironment & Scope, Any] = suite("CacheSpec")(
     test("cacheStats") {
       check(Gen.int) { salt =>
         for {

@@ -12,12 +12,10 @@ import zio.ZIO
  * given a key. Given any effectual function you can convert it to a lookup
  * function for a cache by using the `Lookup` constructor.
  */
-final case class Lookup[-Key, -Environment, +Error, +Value](lookup: Key => ZIO[Environment, Error, Value])
-    extends (Key => ZIO[Environment, Error, Value]) {
+final case class Lookup[-Key, -R, +E, +A](lookup: Key => ZIO[R, E, A]) extends (Key => ZIO[R, E, A]) {
 
   /**
    * Computes a value for the specified key or fails with an error.
    */
-  def apply(key: Key): ZIO[Environment, Error, Value] =
-    lookup(key)
+  def apply(key: Key): ZIO[R, E, A] = lookup(key)
 }

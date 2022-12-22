@@ -37,8 +37,8 @@ A cache is defined in terms of a lookup function that describes how to compute t
 ```scala mdoc:silent
 import zio._
 
-trait Lookup[-Key, -Environment, +Error, +Value] {
-  def lookup(key: Key): ZIO[Environment, Error, Value]
+trait Lookup[-Key, -Environment, +E, +A] {
+  def lookup(key: Key): ZIO[R, E, A]
 }
 ```
 
@@ -47,17 +47,17 @@ The lookup function takes a key of type `Key` and returns a `ZIO` effect that re
 We construct a cache using a lookup function as well as a maximum size and a time to live.
 
 ```scala mdoc:compile-only
-trait Cache[-Key, +Error, +Value] {
-  def get(k: Key): IO[Error, Value]
+trait Cache[-Key, +E, +A] {
+  def get(k: Key): IO[E, A]
 }
 
 object Cache {
 
-  def make[Key, Environment, Error, Value](
+  def make[Key, R, E, A](
     capacity: Int,
     timeToLive: Duration,
-    lookup: Lookup[Key, Environment, Error, Value]
-  ): ZIO[Environment, Nothing, Cache[Key, Error, Value]] =
+    lookup: Lookup[Key, R, E, A]
+  ): ZIO[R, Nothing, Cache[Key, E, A]] =
     ???
 }
 ```
