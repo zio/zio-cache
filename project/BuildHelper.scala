@@ -23,9 +23,9 @@ object BuildHelper {
   val Scala211: String   = versions("2.11")
   val Scala212: String   = versions("2.12")
   val Scala213: String   = versions("2.13")
-  val ScalaDotty: String = versions("3.1")
+  val ScalaDotty: String = versions("3.2")
 
-  val SilencerVersion = "1.7.5"
+  val SilencerVersion = "1.7.12"
 
   private val stdOptions = Seq(
     "-deprecation",
@@ -98,7 +98,7 @@ object BuildHelper {
   )
 
   val scalaReflectSettings = Seq(
-    libraryDependencies ++= Seq("dev.zio" %%% "izumi-reflect" % "1.0.0-M10")
+    libraryDependencies ++= Seq("dev.zio" %%% "izumi-reflect" % "2.2.3")
   )
 
   // Keep this consistent with the version in .core-tests/shared/src/test/scala/REPLSpec.scala
@@ -294,8 +294,8 @@ object BuildHelper {
   )
 
   def jsSettings = Seq(
-    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time"      % "2.2.2",
-    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time-tzdb" % "2.2.2"
+    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time"      % "2.5.0",
+    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time-tzdb" % "2.5.0"
   )
 
   def nativeSettings = Seq(

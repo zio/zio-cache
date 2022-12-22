@@ -1,8 +1,8 @@
 package zio.cache
 
-import zio._
 import zio.test.Assertion._
 import zio.test._
+import zio.{Duration, Ref, UIO, ZIO, duration2DurationOps}
 
 object CacheSpec extends ZIOSpecDefault {
 

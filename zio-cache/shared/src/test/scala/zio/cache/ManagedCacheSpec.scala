@@ -1,8 +1,8 @@
 package zio.cache
 
-import zio._
 import zio.test.Assertion._
 import zio.test._
+import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, ZEnvironment, ZIO, duration2DurationOps, durationInt}
 
 object ManagedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[Environment, Any] = suite("SharedManaged")(
