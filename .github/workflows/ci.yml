@@ -56,7 +56,7 @@ jobs:
       fail-fast: false
       matrix:
         java: ['8', '11', '17']
-        scala: ['2.12.17', '2.13.10', '3.2.1']
+        scala: ['2.11.12', '2.12.17', '2.13.10', '3.2.1']
         platform: ['JVM', 'JS', 'Native']
     steps:
       - name: Checkout current branch
@@ -71,10 +71,13 @@ jobs:
           check-latest: true
       - name: Cache scala dependencies
         uses: coursier/cache-action@v6
-      - name: Run tests
-        if: ${{ !startsWith(matrix.scala, '3.2.') }}
+      - name: Run Scala 2.11
+        if: ${{ startsWith(matrix.scala, '2.11.') && matrix.platform != 'JS' }}
         run: sbt ++${{ matrix.scala }}! test${{ matrix.platform }}
-      - name: Run dotty tests
+      - name: Run Scala 2.[12|13] tests
+        if: ${{ startsWith(matrix.scala, '2.12.') || startsWith(matrix.scala, '2.13.') }}
+        run: sbt ++${{ matrix.scala }}! test${{ matrix.platform }}
+      - name: Run Scala 3 tests
         if: ${{ startsWith(matrix.scala, '3.2.') && matrix.platform == 'JVM' }}
         run: sbt ++${{ matrix.scala }}! testJVM
 
