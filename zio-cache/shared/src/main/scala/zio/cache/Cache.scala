@@ -107,6 +107,14 @@ object Cache {
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
     makeWith(capacity, lookup)(_ => timeToLive)
 
+  def makeWith[Key, Environment, Error, Value](
+    capacity: Int,
+    lookup: Lookup[Key, Environment, Error, Value]
+  )(
+    timeToLive: Exit[Error, Value] => Duration
+  )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
+    makeWith(capacity, lookup, TimeToLive { value: Exit[Error, Value] => ZIO.succeed(timeToLive(value)) })
+
   /**
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function, where the time to live can depend on the `Exit` value
@@ -114,9 +122,8 @@ object Cache {
    */
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
-    lookup: Lookup[Key, Environment, Error, Value]
-  )(
-    timeToLive: Exit[Error, Value] => Duration
+    lookup: Lookup[Key, Environment, Error, Value],
+    timeToLive: TimeToLive[Error, Value]
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
     ZIO.clock.flatMap { clock =>
       ZIO.environment[Environment].flatMap { environment =>
@@ -276,11 +283,13 @@ object Cache {
                 .provideEnvironment(environment)
                 .exit
                 .flatMap { exit =>
-                  val now        = Unsafe.unsafeCompat(implicit u => clock.unsafe.instant())
-                  val entryStats = EntryStats(now)
+                  timeToLive.compute(exit).flatMap { duration =>
+                    val now        = Unsafe.unsafeCompat(implicit u => clock.unsafe.instant())
+                    val entryStats = EntryStats(now)
 
-                  map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
-                  promise.done(exit) *> ZIO.done(exit)
+                    map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(duration)))
+                    promise.done(exit) *> ZIO.done(exit)
+                  }
                 }
                 .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
 

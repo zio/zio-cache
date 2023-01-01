@@ -142,6 +142,33 @@ object CacheSpec extends ZIOSpecDefault {
           size  <- cache.size
         } yield assertTrue(size == 10)
       }
+    },
+    test("time to live using fixed duration") {
+      for {
+        cache <- Cache.makeWith(100, Lookup { n: Int => ZIO.succeed(List(1, 2, 3)) }, TimeToLive.fixed(1.second))
+        v1 <- cache.get(1) // miss
+        v2 <- cache.get(1) // hit
+        _ <- TestClock.adjust(1001.millis)
+        v3 <- cache.get(1) // hit but expired, thus another miss
+        cacheStats <- cache.cacheStats
+        hits        = cacheStats.hits
+        misses      = cacheStats.misses
+      } yield {
+        assertTrue(v1 eq v2) && // v1 and v2 retrieve the same cached object
+        assertTrue(hits == 2L) &&
+        assertTrue(v1 ne v3) && // v3 points to a different object since v1 has expired
+        assertTrue(misses == 2L)
+      }
+    },
+    test("jitter computation") {
+      check(Gen.double(0, 1)) { min =>
+        check(Gen.double(min, 1)) { max =>
+          TimeToLive.jittered(min, max, 1.second).compute(Exit.succeed(())).map { duration =>
+            assertTrue(duration >= 1.second * min) &&
+            assertTrue(duration <= 1.second * max)
+          }
+        }
+      }
     }
   )
 }
