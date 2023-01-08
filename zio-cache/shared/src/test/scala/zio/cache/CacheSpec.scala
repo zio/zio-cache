@@ -1,15 +1,15 @@
 package zio.cache
 
-import zio._
 import zio.test.Assertion._
 import zio.test._
+import zio.{Duration, Ref, Scope, UIO, ZIO, duration2DurationOps}
 
 object CacheSpec extends ZIOSpecDefault {
 
   def hash(x: Int): Int => UIO[Int] =
     y => ZIO.succeed((x ^ y).hashCode)
 
-  def spec: Spec[Environment, Any] = suite("CacheSpec")(
+  def spec: Spec[TestEnvironment with Scope, Any] = suite("CacheSpec")(
     test("cacheStats") {
       check(Gen.int) { salt =>
         for {
