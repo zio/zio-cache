@@ -276,7 +276,7 @@ object Cache {
                 .provideEnvironment(environment)
                 .exit
                 .flatMap { exit =>
-                  val now        = Unsafe.unsafeCompat(implicit u => clock.unsafe.instant())
+                  val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
                   val entryStats = EntryStats(now)
 
                   map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
