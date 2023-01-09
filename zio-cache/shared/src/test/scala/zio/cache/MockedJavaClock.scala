@@ -13,11 +13,12 @@ object MockedJavaClock {
     ref <- Ref.make(Instant.now())
   } yield new MockedJavaClock {
     override def getZone: ZoneId = ???
-    override def instant(): Instant = Unsafe.unsafeCompat { implicit u =>
-      Runtime.default.unsafe.run {
-        ref.get
-      }.getOrThrowFiberFailure()
-    }
+    override def instant(): Instant =
+      Unsafe.unsafe { implicit unsafe =>
+        Runtime.default.unsafe.run {
+          ref.get
+        }.getOrThrowFiberFailure()
+      }
 
     override def withZone(zone: ZoneId): Clock          = ???
     override def advance(duration: Duration): UIO[Unit] = ref.update(_.plusNanos(duration.toNanos))
