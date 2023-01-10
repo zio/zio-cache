@@ -118,6 +118,25 @@ object Cache {
   )(
     timeToLive: Exit[Error, Value] => Duration
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
+    makeWithKey(capacity, lookup)(timeToLive, identity)
+
+  /**
+   * Constructs a new cache with the specified capacity, time to live, and
+   * lookup function, where the time to live can depend on the `Exit` value
+   * returned by the lookup function.
+   *
+   * This variant also allows specifying a custom keying function that will be
+   * used to to convert the input of the lookup function into the key in the
+   * underlying cache. This can be useful when the input to the lookup function
+   * is large and you do not want to store it in the cache.
+   */
+  def makeWithKey[In, Key, Environment, Error, Value](
+    capacity: Int,
+    lookup: Lookup[In, Environment, Error, Value]
+  )(
+    timeToLive: Exit[Error, Value] => Duration,
+    keyBy: In => Key
+  )(implicit trace: Trace): URIO[Environment, Cache[In, Error, Value]] =
     ZIO.clock.flatMap { clock =>
       ZIO.environment[Environment].flatMap { environment =>
         ZIO.fiberId.map { fiberId =>
@@ -159,17 +178,17 @@ object Cache {
           def trackMiss(): Unit =
             misses.increment()
 
-          new Cache[Key, Error, Value] {
+          new Cache[In, Error, Value] {
 
             override def cacheStats(implicit trace: Trace): UIO[CacheStats] =
               ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
-            override def contains(k: Key)(implicit trace: Trace): UIO[Boolean] =
-              ZIO.succeed(map.containsKey(k))
+            override def contains(in: In)(implicit trace: Trace): UIO[Boolean] =
+              ZIO.succeed(map.containsKey(keyBy(in)))
 
-            override def entryStats(k: Key)(implicit trace: Trace): UIO[Option[EntryStats]] =
+            override def entryStats(in: In)(implicit trace: Trace): UIO[Option[EntryStats]] =
               ZIO.succeed {
-                val value = map.get(k)
+                val value = map.get(keyBy(in))
                 if (value eq null) None
                 else {
                   value match {
@@ -183,8 +202,9 @@ object Cache {
                 }
               }
 
-            override def get(k: Key)(implicit trace: Trace): IO[Error, Value] =
+            override def get(in: In)(implicit trace: Trace): IO[Error, Value] =
               ZIO.suspendSucceedUnsafe { implicit u =>
+                val k                              = keyBy(in)
                 var key: MapKey[Key]               = null
                 var promise: Promise[Error, Value] = null
                 var value                          = map.get(k)
@@ -196,7 +216,7 @@ object Cache {
                 if (value eq null) {
                   trackAccess(key)
                   trackMiss()
-                  lookupValueOf(k, promise)
+                  lookupValueOf(in, promise)
                 } else {
                   value match {
                     case MapValue.Pending(key, promise) =>
@@ -208,7 +228,7 @@ object Cache {
                       trackHit()
                       if (hasExpired(timeToLive)) {
                         map.remove(k, value)
-                        get(k)
+                        get(in)
                       } else {
                         ZIO.done(exit)
                       }
@@ -227,15 +247,16 @@ object Cache {
                 }
               }
 
-            override def refresh(k: Key): IO[Error, Unit] =
+            override def refresh(in: In): IO[Error, Unit] =
               ZIO.suspendSucceedUnsafe { implicit u =>
+                val k       = keyBy(in)
                 val promise = newPromise()
                 var value   = map.get(k)
                 if (value eq null) {
                   value = map.putIfAbsent(k, MapValue.Pending(new MapKey(k), promise))
                 }
                 val result = if (value eq null) {
-                  lookupValueOf(k, promise)
+                  lookupValueOf(in, promise)
                 } else {
                   value match {
                     case MapValue.Pending(_, promiseInProgress) =>
@@ -243,10 +264,10 @@ object Cache {
                     case completedResult @ MapValue.Complete(mapKey, _, _, ttl) =>
                       if (hasExpired(ttl)) {
                         map.remove(k, value)
-                        get(k)
+                        get(in)
                       } else {
                         // Only trigger the lookup if we're still the current value, `completedResult`
-                        lookupValueOf(mapKey.value, promise).when {
+                        lookupValueOf(in, promise).when {
                           map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
                         }
                       }
@@ -257,9 +278,9 @@ object Cache {
                 result.unit
               }
 
-            override def invalidate(k: Key)(implicit trace: Trace): UIO[Unit] =
+            override def invalidate(in: In)(implicit trace: Trace): UIO[Unit] =
               ZIO.succeed {
-                map.remove(k)
+                map.remove(keyBy(in))
                 ()
               }
 
@@ -271,18 +292,21 @@ object Cache {
             def size(implicit trace: Trace): UIO[Int] =
               ZIO.succeed(map.size)
 
-            private def lookupValueOf(key: Key, promise: Promise[Error, Value]): IO[Error, Value] =
-              lookup(key)
-                .provideEnvironment(environment)
-                .exit
-                .flatMap { exit =>
-                  val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
-                  val entryStats = EntryStats(now)
+            private def lookupValueOf(in: In, promise: Promise[Error, Value]): IO[Error, Value] =
+              ZIO.suspendSucceed {
+                val key = keyBy(in)
+                lookup(in)
+                  .provideEnvironment(environment)
+                  .exit
+                  .flatMap { exit =>
+                    val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
+                    val entryStats = EntryStats(now)
 
-                  map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
-                  promise.done(exit) *> ZIO.done(exit)
-                }
-                .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
+                    map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+                    promise.done(exit) *> ZIO.done(exit)
+                  }
+                  .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
+              }
 
             private def newPromise()(implicit unsafe: Unsafe) =
               Promise.unsafe.make[Error, Value](fiberId)
