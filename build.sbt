@@ -49,7 +49,8 @@ lazy val root = project
     zioCacheJVM,
     zioCacheJS,
     zioCacheNative,
-    benchmarks
+    benchmarks,
+    docs
   )
 
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
@@ -95,18 +96,14 @@ lazy val docs = project
   .in(file("zio-cache-docs"))
   .settings(stdSettings("zio-cache"))
   .settings(
-    publish / skip := true,
     moduleName     := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
-    projectName := "ZIO Cache",
-    badgeInfo := Some(
-      BadgeInfo(
-        artifact = "zio-cache_2.12",
-        projectStage = ProjectStage.Development
-      )
-    ),
-    docsPublishBranch := "zio2"
+    projectName       := "ZIO Cache",
+    mainModuleName    := (zioCacheJVM / moduleName).value,
+    projectStage      := ProjectStage.Development,
+    ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
+    docsPublishBranch := "series/2.x"
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
