@@ -70,6 +70,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
 
 lazy val zioCacheJS = zioCache.js
   .settings(jsSettings)
+  .settings(crossScalaVersions -= Scala211) // `scala-java-time` not available for Scala 2.11
   .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
   .settings(scalaJSUseMainModuleInitializer := true)
 
