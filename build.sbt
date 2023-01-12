@@ -96,14 +96,14 @@ lazy val docs = project
   .in(file("zio-cache-docs"))
   .settings(stdSettings("zio-cache"))
   .settings(
-    moduleName     := "zio-cache-docs",
+    moduleName := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
-    projectName       := "ZIO Cache",
-    mainModuleName    := (zioCacheJVM / moduleName).value,
-    projectStage      := ProjectStage.Development,
+    projectName                                := "ZIO Cache",
+    mainModuleName                             := (zioCacheJVM / moduleName).value,
+    projectStage                               := ProjectStage.Development,
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
-    docsPublishBranch := "series/2.x"
+    docsPublishBranch                          := "series/2.x"
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
