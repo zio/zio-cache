@@ -2,15 +2,11 @@
 [//]: # (So please do not edit it manually. Instead, change "docs/index.md" file or sbt setting keys)
 [//]: # (e.g. "readmeDocumentation" and "readmeSupport".)
 
-
 # ZIO Cache
 
 ZIO Cache is a library that makes it easy to optimize the performance of our application by caching values.
 
-Project Stage | CI | Release | Snapshot | Discord | Github |
---------------|----|---------|----------|---------|--------|
-[![Development](https://img.shields.io/badge/Project%20Stage-Development-green.svg)](https://github.com/zio/zio/wiki/Project-Stages)        |![CI Badge](https://github.com/zio/zio-cache/workflows/CI/badge.svg) |[![Sonatype Releases](https://img.shields.io/nexus/r/https/oss.sonatype.org/dev.zio/zio-cache_2.12.svg)](https://oss.sonatype.org/content/repositories/releases/dev/zio/zio-cache_2.12/) |[![Sonatype Snapshots](https://img.shields.io/nexus/s/https/oss.sonatype.org/dev.zio/zio-cache_2.12.svg)](https://oss.sonatype.org/content/repositories/snapshots/dev/zio/zio-cache_2.12/) |[![Chat on Discord!](https://img.shields.io/discord/629491597070827530?logo=discord)](https://discord.gg/2ccFBr4) |[![ZIO Cache](https://img.shields.io/github/stars/zio/zio-cache?style=social)](https://github.com/zio/zio-cache) |
-
+[![Development](https://img.shields.io/badge/Project%20Stage-Development-green.svg)](https://github.com/zio/zio/wiki/Project-Stages) ![CI Badge](https://github.com/zio/zio-cache/workflows/CI/badge.svg) [![Sonatype Releases](https://img.shields.io/nexus/r/https/oss.sonatype.org/dev.zio/zio-cache_2.13.svg?label=Sonatype%20Release)](https://oss.sonatype.org/content/repositories/releases/dev/zio/zio-cache_2.13/) [![Sonatype Snapshots](https://img.shields.io/nexus/s/https/oss.sonatype.org/dev.zio/zio-cache_2.13.svg?label=Sonatype%20Snapshot)](https://oss.sonatype.org/content/repositories/snapshots/dev/zio/zio-cache_2.13/) [![javadoc](https://javadoc.io/badge2/dev.zio/zio-cache-docs_2.13/javadoc.svg)](https://javadoc.io/doc/dev.zio/zio-cache-docs_2.13) [![ZIO Cache](https://img.shields.io/github/stars/zio/zio-cache?style=social)](https://github.com/zio/zio-cache)
 
 ## Introduction
 
@@ -75,7 +71,7 @@ If multiple concurrent processes get the value at the same time the value will o
 In order to use this library, we need to add the following line in our `build.sbt` file:
 
 ```scala
-libraryDependencies += "dev.zio" %% "zio-cache" % "0.2.1"
+libraryDependencies += "dev.zio" %% "zio-cache" % "0.2.2"
 ```
 
 ## Example
