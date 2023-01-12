@@ -293,10 +293,7 @@ object BuildHelper {
     }
   )
 
-  def jsSettings = Seq(
-    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time"      % "2.5.0",
-    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time-tzdb" % "2.5.0"
-  )
+  def jsSettings = Seq()
 
   def nativeSettings = Seq(
     Test / test             := (Test / compile).value,
