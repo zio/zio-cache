@@ -99,6 +99,7 @@ lazy val docs = project
     moduleName := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
+    crossScalaVersions -= "2.11.12",
     projectName                                := "ZIO Cache",
     mainModuleName                             := (zioCacheJVM / moduleName).value,
     projectStage                               := ProjectStage.Development,
