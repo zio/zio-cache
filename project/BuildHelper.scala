@@ -263,7 +263,7 @@ object BuildHelper {
       else
         Seq("-P:silencer:globalFilters=[zio.stacktracer.TracingImplicits.disableAutoTrace]")
     }
-  ) ++ deactivateDocForScala211
+  )
 
   def macroExpansionSettings = Seq(
     scalacOptions ++= {
@@ -309,28 +309,6 @@ object BuildHelper {
         Seq("org.scala-lang" % "scala-reflect" % scalaVersion.value % Test)
     }
   )
-
-  /**
-   * mdoc is not available anymore for Scala 2.11
-   */
-  lazy val deactivateDocForScala211 =
-    Seq(
-      doc / skip :=
-        (CrossVersion.partialVersion(scalaVersion.value) match {
-          case Some((2, 11)) => true
-          case _             => false
-        }),
-      Compile / doc / sources :=
-        (CrossVersion.partialVersion(scalaVersion.value) match {
-          case Some((2, 11)) => Seq.empty
-          case _             => (Compile / doc / sources).value
-        }),
-      Compile / packageDoc / publishArtifact :=
-        (CrossVersion.partialVersion(scalaVersion.value) match {
-          case Some((2, 11)) => false
-          case _             => true
-        })
-    )
 
   def welcomeMessage = onLoadMessage := {
     def header(text: String): String = s"${scala.Console.RED}$text${scala.Console.RESET}"
