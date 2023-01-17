@@ -71,14 +71,11 @@ jobs:
           check-latest: true
       - name: Cache scala dependencies
         uses: coursier/cache-action@v6
-      - name: Run Scala 2.11
-        if: ${{ startsWith(matrix.scala, '2.11.') && matrix.platform != 'JS' }}
-        run: sbt ++${{ matrix.scala }}! test${{ matrix.platform }}
-      - name: Run Scala 2.[12|13] tests
-        if: ${{ startsWith(matrix.scala, '2.12.') || startsWith(matrix.scala, '2.13.') }}
+      - name: Run Scala 2 tests
+        if: ${{ startsWith(matrix.scala, '2.') }}
         run: sbt ++${{ matrix.scala }}! test${{ matrix.platform }}
       - name: Run Scala 3 tests
-        if: ${{ startsWith(matrix.scala, '3.2.') && matrix.platform == 'JVM' }}
+        if: ${{ startsWith(matrix.scala, '3.') && matrix.platform == 'JVM' }}
         run: sbt ++${{ matrix.scala }}! testJVM
 
   ci:

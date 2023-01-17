@@ -293,10 +293,7 @@ object BuildHelper {
     }
   )
 
-  def jsSettings = Seq(
-    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time"      % "2.5.0",
-    libraryDependencies += "io.github.cquiroz" %%% "scala-java-time-tzdb" % "2.5.0"
-  )
+  def jsSettings = Seq()
 
   def nativeSettings = Seq(
     Test / test             := (Test / compile).value,
@@ -316,7 +313,8 @@ object BuildHelper {
   def welcomeMessage = onLoadMessage := {
     def header(text: String): String = s"${scala.Console.RED}$text${scala.Console.RESET}"
 
-    def item(text: String): String    = s"${scala.Console.GREEN}> ${scala.Console.CYAN}$text${scala.Console.RESET}"
+    def item(text: String): String = s"${scala.Console.GREEN}> ${scala.Console.CYAN}$text${scala.Console.RESET}"
+
     def subItem(text: String): String = s"  ${scala.Console.YELLOW}> ${scala.Console.CYAN}$text${scala.Console.RESET}"
 
     s"""|${header(" ________ ___")}

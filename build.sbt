@@ -1,5 +1,7 @@
 import BuildHelper._
 
+Global / onChangedBuildSource := ReloadOnSourceChanges
+
 inThisBuild(
   List(
     organization := "dev.zio",
@@ -37,7 +39,7 @@ addCommandAlias(
   ";zioCacheNative/test:compile"
 )
 
-val zioVersion = "2.0.5"
+val zioVersion = "2.0.6"
 
 lazy val root = project
   .in(file("."))
