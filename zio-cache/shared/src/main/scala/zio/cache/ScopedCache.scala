@@ -77,6 +77,12 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * Returns the approximate number of values in the cache.
    */
   def size: UIO[Int]
+
+  /**
+   * Clean all expired resources
+   * @return the number of expired resource that has been clean
+   */
+  def freeExpired: UIO[Int]
 }
 object ScopedCache {
 
@@ -185,6 +191,24 @@ object ScopedCache {
               }
             }
           }
+
+        def freeExpired: UIO[Int] = ZIO.suspendSucceed {
+          var expiredKey = List.empty[Key]
+          map.entrySet().forEach { entry =>
+            entry.getValue match {
+              case MapValue.Complete(_, _, _, _, ttl) if hasExpired(ttl) =>
+                expiredKey = entry.getKey :: expiredKey
+              case _ =>
+                ()
+            }
+          }
+
+          ZIO
+            .foreachDiscard(expiredKey) { key =>
+              invalidate(key)
+            }
+            .as(expiredKey.length)
+        }
 
         override def get(k: Key): ZIO[Scope, Error, Value] =
           lookupValueOf(k).memoize.flatMap { lookupValue =>

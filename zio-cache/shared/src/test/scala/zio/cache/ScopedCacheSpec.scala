@@ -721,6 +721,49 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                       }
           } yield result
         }
+      ),
+      suite("freeExpired")(
+        test("should properly clean and remove from cache expired resource") {
+          val numExpired    = 30
+          val numNotExpired = 50
+          for {
+            observablesResource <-
+              ZIO.foreach((0 until numExpired + numNotExpired).toList)(_ => ObservableResourceForTest.makeUnit)
+            clock <- MockedJavaClock.make
+            scopedCache =
+              ScopedCache.makeWith(
+                capacity = numExpired + numNotExpired,
+                scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
+                clock
+              )(timeToLive = { _: Exit[Nothing, Unit] => Duration.fromSeconds(4) })
+            result <- ZIO.scoped {
+                        scopedCache.flatMap { cache =>
+                          for {
+                            _ <- ZIO.foreachParDiscard((0 until numExpired))(n => ZIO.scoped(cache.get(n).unit))
+                            _ <- clock.advance(2.second)
+                            _ <- ZIO.foreachParDiscard((numExpired until numExpired + numNotExpired))(n =>
+                                   ZIO.scoped(cache.get(n).unit)
+                                 )
+                            _          <- clock.advance(3.second)
+                            numCleaned <- cache.freeExpired
+                            expiredProperlyCleaned <- ZIO
+                                                        .foreach((0 until numExpired).toList)(i =>
+                                                          observablesResource(i).assertAcquiredOnceAndCleaned
+                                                        )
+                                                        .map(_.foldLeft(assertCompletes)(_ && _))
+                            expireNotProperlyCleaned <- ZIO
+                                                          .foreach(
+                                                            (numExpired until numExpired + numNotExpired).toList
+                                                          )(i => observablesResource(i).assertAcquiredOnceAndNotCleaned)
+                                                          .map(_.foldLeft(assertCompletes)(_ && _))
+                            size <- cache.size
+                          } yield assertTrue(
+                            numCleaned == numExpired && size == numNotExpired
+                          ) && expiredProperlyCleaned && expireNotProperlyCleaned
+                        }
+                      }
+          } yield result
+        }
       )
     ),
     suite("property base testing")(
