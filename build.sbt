@@ -63,7 +63,6 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
     )
   )
   .settings(testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"))
-  .enablePlugins(EcosystemPlugin)
 
 lazy val zioCacheJS = zioCache.js
   .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
