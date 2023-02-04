@@ -7,9 +7,10 @@ Global / onChangedBuildSource := ReloadOnSourceChanges
 
 inThisBuild(
   List(
-    organization := "dev.zio",
-    homepage     := Some(url("https://zio.dev/zio-cache/")),
-    licenses     := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+    organization       := "dev.zio",
+    homepage           := Some(url("https://zio.dev/zio-cache/")),
+    licenses           := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
+    crossScalaVersions := Seq(Scala211, Scala212, Scala213, Scala3),
     developers := List(
       Developer(
         "jdegoes",
@@ -66,6 +67,18 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
 
 lazy val zioCacheJS = zioCache.js
   .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
+  .settings(
+    stdSettings(
+      name = "zio-cache",
+      packageName = "zio.cache",
+      scalaVersion = Scala213,
+      crossScalaVersions = Seq(Scala211, Scala212, Scala213),
+      enableCrossProject = true
+    )
+  )
+  .settings(
+    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
+  )
   .settings(scalaJSUseMainModuleInitializer := true)
 
 lazy val zioCacheJVM = zioCache.jvm
