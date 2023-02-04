@@ -67,15 +67,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
 
 lazy val zioCacheJS = zioCache.js
   .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
-  .settings(
-    stdSettings(
-      name = "zio-cache",
-      packageName = "zio.cache",
-      scalaVersion = Scala213,
-      crossScalaVersions = Seq(Scala211, Scala212, Scala213),
-      enableCrossProject = true
-    )
-  )
+  .settings(crossScalaVersions := Seq(Scala211, Scala212, Scala213))
   .settings(
     unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
   )
