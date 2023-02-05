@@ -77,9 +77,15 @@ lazy val zioCacheNative = zioCache.native
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
   .settings(
-    moduleName         := "zio-cache-benchmark",
-    crossScalaVersions := Seq(Scala211, Scala212, Scala213),
-    publish / skip     := true
+    stdSettings(
+      name = "zio-cache-benchmark",
+      crossScalaVersions = Seq(Scala211, Scala212, Scala213),
+      packageName = "zio.cache",
+      scalaVersion = Scala213
+    )
+  )
+  .settings(
+    publish / skip := true
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(JmhPlugin)
