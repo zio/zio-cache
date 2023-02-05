@@ -55,7 +55,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
     )
   )
   .settings(silencerSettings)
-  .settings(enableZIO(zioVersion))
+  .settings(enableZIO(zioVersion, enableTesting = true))
 
 lazy val zioCacheJS = zioCache.js
   .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
