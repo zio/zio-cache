@@ -12,6 +12,27 @@ name: Website
     - series/2.x
   pull_request: {}
 jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        scala: [2.11.12, 2.12.17, 2.13.10, 3.2.1]
+        projects:
+          - benchmarks
+          - docs
+          - zioCacheJS
+          - zioCacheJVM
+          - zioCacheNative
+    steps:
+      - name: Setup Scala
+        uses: actions/setup-java@v3.9.0
+        with:
+          distribution: temurin
+          java-version: 17
+          check-latest: true
+      - name: Test Modules
+        run: sbt 'project ${{ matrix.projects }}' '++${{ matrix.scala }}' test
   build:
     name: Build and Test
     runs-on: ubuntu-latest
