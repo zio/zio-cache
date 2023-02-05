@@ -33,7 +33,7 @@ jobs:
           check-latest: true
       - name: Test Modules
         run: |
-         - cd ..
+         - ls
          - sbt "project ${{ matrix.projects }}; ++${{ matrix.scala }}; test"
   build:
     name: Build and Test
