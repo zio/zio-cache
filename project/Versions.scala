@@ -4,5 +4,8 @@ object Versions {
   val Scala213 = "2.13.10"
   val Scala3   = "3.2.1"
 
-  val SilencerVersion = "1.7.12"
+  val zioVersion                   = "2.0.6"
+  val SilencerVersion              = "1.7.12"
+  val IzumiReflectVersion          = "2.2.5"
+  val ScalaCollectionCompatVersion = "2.9.0"
 }

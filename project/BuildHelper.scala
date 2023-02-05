@@ -8,13 +8,6 @@ import sbtcrossproject.CrossPlugin.autoImport._
 import scalafix.sbt.ScalafixPlugin.autoImport._
 
 object BuildHelper {
-  def nativeSettings: Seq[Def.Setting[_]] =
-    Seq(
-      Test / test             := (Test / compile).value,
-      doc / skip              := true,
-      Compile / doc / sources := Seq.empty
-    )
-
   val silencerSettings: Seq[Def.Setting[Task[Seq[String]]]] =
     Seq(scalacOptions ++= {
       if (Keys.scalaVersion.value.startsWith("3"))

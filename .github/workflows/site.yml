@@ -12,31 +12,6 @@ name: Website
     - series/2.x
   pull_request: {}
 jobs:
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        scala: [2.11.12, 2.12.17, 2.13.10, 3.2.1]
-        projects:
-          - benchmarks
-          - docs
-          - zioCacheJS
-          - zioCacheJVM
-          - zioCacheNative
-    steps:
-      - name: Setup Scala
-        uses: actions/setup-java@v3.9.0
-        with:
-          distribution: temurin
-          java-version: 17
-          check-latest: true
-      - name: Test Modules
-        run: |
-         ls
-         cd ..
-         ls 
-         sbt "project ${{ matrix.projects }}; ++${{ matrix.scala }}; test"
   build:
     name: Build and Test
     runs-on: ubuntu-latest
@@ -50,7 +25,7 @@ jobs:
       uses: actions/setup-java@v3.9.0
       with:
         distribution: temurin
-        java-version: 17
+        java-version: '17'
         check-latest: true
     - name: Check if the README file is up to date
       run: sbt  docs/checkReadme
@@ -60,6 +35,55 @@ jobs:
       run: sbt  +publishLocal
     - name: Check website build process
       run: sbt docs/clean; sbt  docs/buildWebsite
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+    - name: Git Checkout
+      uses: actions/checkout@v3.3.0
+      with:
+        fetch-depth: '0'
+    - name: Setup Scala
+      uses: actions/setup-java@v3.9.0
+      with:
+        distribution: temurin
+        java-version: '17'
+        check-latest: true
+    - name: Lint
+      run: sbt lint
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        java:
+        - '8'
+        - '11'
+        - '17'
+        scala:
+        - 2.11.12
+        - 2.12.17
+        - 2.13.10
+        - 3.2.1
+        project:
+        - zioCacheNative
+        - benchmarks
+        - docs
+        - zioCacheJVM
+        - zioCacheJS
+    steps:
+    - name: Setup Scala
+      uses: actions/setup-java@v3.9.0
+      with:
+        distribution: temurin
+        java-version: ${{ matrix.java }}
+        check-latest: true
+    - name: Git Checkout
+      uses: actions/checkout@v3.3.0
+      with:
+        fetch-depth: '0'
+    - name: Test
+      run: sbt 'project ${{ matrix.project }}' '++${{ matrix.scala }}' test
   publish-docs:
     name: Publish Docs
     runs-on: ubuntu-latest
@@ -73,7 +97,7 @@ jobs:
       uses: actions/setup-java@v3.9.0
       with:
         distribution: temurin
-        java-version: 17
+        java-version: '17'
         check-latest: true
     - name: Setup NodeJs
       uses: actions/setup-node@v3
@@ -98,7 +122,7 @@ jobs:
       uses: actions/setup-java@v3.9.0
       with:
         distribution: temurin
-        java-version: 17
+        java-version: '17'
         check-latest: true
     - name: Generate Readme
       run: sbt  docs/generateReadme
