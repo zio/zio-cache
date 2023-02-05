@@ -32,7 +32,9 @@ jobs:
           java-version: 17
           check-latest: true
       - name: Test Modules
-        run: sbt "project ${{ matrix.projects }}; ++${{ matrix.scala }}; test"
+        run: |
+         - cd ..
+         - sbt "project ${{ matrix.projects }}; ++${{ matrix.scala }}; test"
   build:
     name: Build and Test
     runs-on: ubuntu-latest
