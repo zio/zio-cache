@@ -17,9 +17,9 @@ env:
   pull_request: {}
 jobs:
   build:
-    name: Build and Test
+    name: Build
     runs-on: ubuntu-latest
-    if: ${{ github.event_name == 'pull_request' }}
+    continue-on-error: true
     steps:
     - name: Git Checkout
       uses: actions/checkout@v3.3.0
@@ -42,6 +42,7 @@ jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
+    continue-on-error: false
     steps:
     - name: Git Checkout
       uses: actions/checkout@v3.3.0
@@ -58,22 +59,24 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+    continue-on-error: false
     strategy:
+      fail-fast: false
       matrix:
         java:
         - '8'
         - '11'
         - '17'
-        scala:
-        - 2.11.12
-        - 2.12.17
-        - 2.13.10
-        - 3.2.1
-        project:
-        - zioCacheNative
-        - benchmarks
-        - zioCacheJVM
-        - zioCacheJS
+        project-scala:
+        - '''project zioCacheJVM'' ''++2.11.12'''
+        - '''project zioCacheJVM'' ''++2.12.17'''
+        - '''project zioCacheJVM'' ''++2.13.10'''
+        - '''project zioCacheJVM'' ''++3.2.1'''
+        - '''project zioCacheJS'' ''++2.11.12'''
+        - '''project zioCacheJS'' ''++2.12.17'''
+        - '''project zioCacheJS'' ''++2.13.10'''
+        - '''project zioCacheNative'' ''++2.12.17'''
+        - '''project zioCacheNative'' ''++2.13.10'''
     steps:
     - name: Setup Scala
       uses: actions/setup-java@v3.9.0
@@ -86,10 +89,11 @@ jobs:
       with:
         fetch-depth: '0'
     - name: Test
-      run: sbt 'project ${{ matrix.project }}' '++${{ matrix.scala }}' test
+      run: sbt ${{ matrix.project-scala }} test
   release:
     name: Release
     runs-on: ubuntu-latest
+    continue-on-error: false
     needs:
     - build
     - lint
@@ -116,6 +120,7 @@ jobs:
   publish-docs:
     name: Publish Docs
     runs-on: ubuntu-latest
+    continue-on-error: false
     needs:
     - release
     if: ${{ ((github.event_name == 'release') && (github.event.action == 'published')) || (github.event_name == 'workflow_dispatch') }}
@@ -142,6 +147,7 @@ jobs:
   generate-readme:
     name: Generate README
     runs-on: ubuntu-latest
+    continue-on-error: false
     if: ${{ (github.event_name == 'push') || ((github.event_name == 'release') && (github.event.action == 'published')) }}
     steps:
     - name: Git Checkout

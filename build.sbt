@@ -63,7 +63,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   )
 
 lazy val zioCacheJS = zioCache.js
-  .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
+  .settings(name := "zio-cache-js", libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
   .settings(crossScalaVersions := Seq(Scala211, Scala212, Scala213))
   .settings(scalaJSUseMainModuleInitializer := true)
 
@@ -108,8 +108,13 @@ lazy val docs = project
     projectStage                               := ProjectStage.Development,
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
     docsPublishBranch                          := "series/2.x",
-    supportedScalaVersions                     := List(Scala211, Scala212, Scala213, Scala3),
-    publish / skip                             := true
+    supportedScalaVersions :=
+      Map(
+        (zioCacheJVM / thisProject).value.id    -> (zioCacheJVM / crossScalaVersions).value,
+        (zioCacheJS / thisProject).value.id     -> (zioCacheJS / crossScalaVersions).value,
+        (zioCacheNative / thisProject).value.id -> (zioCacheNative / crossScalaVersions).value
+      ),
+    publish / skip := true
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
