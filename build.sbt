@@ -74,6 +74,7 @@ lazy val zioCacheJVM = zioCache.jvm
 
 lazy val zioCacheNative = zioCache.native
   .settings(
+    crossScalaVersions -= Scala211,
     Test / test             := (Test / compile).value,
     doc / skip              := true,
     Compile / doc / sources := Seq.empty
@@ -107,7 +108,8 @@ lazy val docs = project
     projectStage                               := ProjectStage.Development,
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
     docsPublishBranch                          := "series/2.x",
-    supportedScalaVersions                     := List(Scala211, Scala212, Scala213, Scala3)
+    supportedScalaVersions                     := List(Scala211, Scala212, Scala213, Scala3),
+    publish / skip                             := true
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
