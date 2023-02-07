@@ -56,6 +56,11 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   )
   .settings(silencerSettings)
   .settings(enableZIO(zioVersion, enableTesting = true))
+  .settings(
+    libraryDependencies ++= Seq(
+      "org.scala-lang.modules" %% "scala-collection-compat" % ScalaCollectionCompatVersion
+    )
+  )
 
 lazy val zioCacheJS = zioCache.js
   .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
