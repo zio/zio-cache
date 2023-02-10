@@ -1,8 +1,9 @@
 package zio.cache
 
+import zio.Exit.{Failure, Success}
 import zio.test.Assertion._
 import zio.test._
-import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, ZEnvironment, ZIO, duration2DurationOps, durationInt}
+import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, ZEnvironment, ZIO, durationInt}
 
 object ScopedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment with Scope, Any] = suite("SharedScoped")(
@@ -545,9 +546,12 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             result <-
               ZIO.scoped {
                 ScopedCache
-                  .makeWith(capacity = 10, scopedLookup = ScopedLookup(watchableLookup.lookup), clock = fakeClock) {
-                    (_: Exit[Nothing, Unit]) =>
-                      10.second
+                  .makeWith(
+                    capacity = 10,
+                    scopedLookup = ScopedLookup(watchableLookup.lookup),
+                    clock = fakeClock
+                  ) { (_: Exit[Nothing, Unit]) =>
+                    10.second
                   }
                   .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
                     val subManaged = scopedCache.get(())
@@ -576,7 +580,11 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             fakeClock       <- MockedJavaClock.make
             result <- ZIO.scoped {
                         ScopedCache
-                          .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
+                          .makeWith(
+                            10,
+                            ScopedLookup(watchableLookup.lookup),
+                            fakeClock
+                          ) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
                           .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
@@ -607,7 +615,11 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             fakeClock       <- MockedJavaClock.make
             result <- ZIO.scoped {
                         ScopedCache
-                          .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
+                          .makeWith(
+                            10,
+                            ScopedLookup(watchableLookup.lookup),
+                            fakeClock
+                          ) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
                           .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
@@ -636,7 +648,11 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             fakeClock       <- MockedJavaClock.make
             result <- ZIO.scoped {
                         ScopedCache
-                          .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
+                          .makeWith(
+                            10,
+                            ScopedLookup(watchableLookup.lookup),
+                            fakeClock
+                          ) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
                           .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
@@ -649,7 +665,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                                 watchableLookup
                                   .getCalledNum(key = ())
                                   .repeat(
-                                    (Schedule.recurWhile[Int](_ < 1) >>> Schedule.elapsed).whileOutput(_ < 100.millis)
+                                    (Schedule.recurWhile[Int](_ < 1) >>> Schedule.elapsed).whileOutput(_.toMillis < 100)
                                   )
                               _                          <- Live.live(ZIO.sleep(100.millis))
                               secondLookupCalled         <- watchableLookup.assertCalledNum(key = ())(equalTo(2))
@@ -669,7 +685,11 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             fakeClock       <- MockedJavaClock.make
             result <- ZIO.scoped {
                         ScopedCache
-                          .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
+                          .makeWith(
+                            10,
+                            ScopedLookup(watchableLookup.lookup),
+                            fakeClock
+                          ) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
                           .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
@@ -682,7 +702,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                                 watchableLookup
                                   .getCalledNum(key = ())
                                   .repeat(
-                                    (Schedule.recurWhile[Int](_ < 1) >>> Schedule.elapsed).whileOutput(_ < 100.millis)
+                                    (Schedule.recurWhile[Int](_ < 1) >>> Schedule.elapsed).whileOutput(_.toMillis < 100)
                                   )
                               _                    <- Live.live(ZIO.sleep(100.millis))
                               secondLookupCalled   <- watchableLookup.assertCalledNum(key = ())(equalTo(2))
@@ -700,7 +720,11 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             fakeClock       <- MockedJavaClock.make
             result <- ZIO.scoped {
                         ScopedCache
-                          .makeWith(10, ScopedLookup(watchableLookup.lookup), fakeClock) { (_: Exit[Nothing, Unit]) =>
+                          .makeWith(
+                            10,
+                            ScopedLookup(watchableLookup.lookup),
+                            fakeClock
+                          ) { (_: Exit[Nothing, Unit]) =>
                             10.second
                           }
                           .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
@@ -723,7 +747,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         }
       ),
       suite("freeExpired")(
-        test("should properly clean and remove from cache expired resource") {
+        test("should properly clean and remove from cache expired resources") {
           val numExpired    = 30
           val numNotExpired = 50
           for {
@@ -735,7 +759,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                 capacity = numExpired + numNotExpired,
                 scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
                 clock
-              )(timeToLive = { _: Exit[Nothing, Unit] => Duration.fromSeconds(4) })
+              )(timeToLive = { (_: Exit[Nothing, Unit]) => Duration.fromSeconds(4) })
             result <- ZIO.scoped {
                         scopedCache.flatMap { cache =>
                           for {
@@ -746,25 +770,114 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                                  )
                             _          <- clock.advance(3.second)
                             numCleaned <- cache.freeExpired
-                            expiredProperlyCleaned <- ZIO
-                                                        .foreach((0 until numExpired).toList)(i =>
-                                                          observablesResource(i).assertAcquiredOnceAndCleaned
-                                                        )
-                                                        .map(_.foldLeft(assertCompletes)(_ && _))
-                            expireNotProperlyCleaned <- ZIO
-                                                          .foreach(
-                                                            (numExpired until numExpired + numNotExpired).toList
-                                                          )(i => observablesResource(i).assertAcquiredOnceAndNotCleaned)
-                                                          .map(_.foldLeft(assertCompletes)(_ && _))
+                            expiredResourceProperlyCleaned <- ZIO
+                                                                .foreach((0 until numExpired).toList)(i =>
+                                                                  observablesResource(i).assertAcquiredOnceAndCleaned
+                                                                )
+                                                                .map(_.foldLeft(assertCompletes)(_ && _))
+                            notExpiredResourceNotCleaned <-
+                              ZIO
+                                .foreach(
+                                  (numExpired until numExpired + numNotExpired).toList
+                                )(i => observablesResource(i).assertAcquiredOnceAndNotCleaned)
+                                .map(_.foldLeft(assertCompletes)(_ && _))
                             size <- cache.size
                           } yield assertTrue(
                             numCleaned == numExpired && size == numNotExpired
-                          ) && expiredProperlyCleaned && expireNotProperlyCleaned
+                          ) && expiredResourceProperlyCleaned && notExpiredResourceNotCleaned
+                        }
+                      }
+          } yield result
+        },
+        test("should correctly use potentially different TTL for different resources") {
+          val numResource = 3
+          for {
+            observablesResource <-
+              ZIO.foreach((0 until numResource).toList)(i => ObservableResourceForTest.make(i))
+            clock <- MockedJavaClock.make
+            scopedCache =
+              ScopedCache.makeWith(
+                capacity = numResource,
+                scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
+                clock
+              )(timeToLive = {
+                case Success(value) => value.second
+                case Failure(_)     => 0.second
+              })
+            result <- ZIO.scoped {
+                        scopedCache.flatMap { cache =>
+                          for {
+                            _                   <- ZIO.foreachParDiscard((0 until numResource))(n => ZIO.scoped(cache.get(n).unit))
+                            _                   <- clock.advance(500.milliseconds)
+                            freeAfter500ms      <- cache.freeExpired
+                            cacheSizeAfter500ms <- cache.size
+                            onlyCorrectResourceCleanedAt500ms <-
+                              observablesResource(0).assertAcquiredOnceAndCleaned && observablesResource(
+                                1
+                              ).assertAcquiredOnceAndNotCleaned && observablesResource(
+                                2
+                              ).assertAcquiredOnceAndNotCleaned
+                            _               <- clock.advance(1.second)
+                            freeAfter1500ms <- cache.freeExpired
+                            onlyCorrectResourceCleanedAt1500ms <-
+                              observablesResource(1).assertAcquiredOnceAndCleaned && observablesResource(
+                                2
+                              ).assertAcquiredOnceAndNotCleaned
+                            cacheSizeAfter1500ms        <- cache.size
+                            _                           <- clock.advance(1.second)
+                            freeAfter2500ms             <- cache.freeExpired
+                            cacheSizeAfter2500ms        <- cache.size
+                            allResourcesCleanedAt2500ms <- observablesResource(2).assertAcquiredOnceAndCleaned
+                          } yield assertTrue(
+                            freeAfter500ms == 1 && cacheSizeAfter500ms == 2 &&
+                              freeAfter1500ms == 1 && cacheSizeAfter1500ms == 1 &&
+                              freeAfter2500ms == 1 && cacheSizeAfter2500ms == 0
+                          ) && onlyCorrectResourceCleanedAt500ms && onlyCorrectResourceCleanedAt1500ms && allResourcesCleanedAt2500ms
                         }
                       }
           } yield result
         }
       )
+    ),
+    suite("automatic clean expired resource")(
+      test("should every 1 second clean and remove expired resources") {
+        val numResource = 30
+        for {
+          observablesResource <-
+            ZIO.foreach((0 until numResource).toList)(_ => ObservableResourceForTest.makeUnit)
+          clock <- MockedJavaClock.make
+          scopedCache =
+            ScopedCache.makeWith(
+              capacity = numResource,
+              scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
+              clock
+            )(timeToLive = { (_: Exit[Nothing, Unit]) => Duration.fromSeconds(4) })
+          result <- ZIO.scoped {
+                      scopedCache.flatMap { cache =>
+                        for {
+                          _ <- ZIO.foreachParDiscard((0 until numResource))(n => ZIO.scoped(cache.get(n).unit))
+                          _ <- clock.advance(3.second)
+                          _ <- TestClock.adjust(3.second)
+                          resourceNotCleanedYetBeforeClean <- ZIO
+                                                                .foreach((0 until numResource).toList) { i =>
+                                                                  observablesResource(i).assertAcquiredOnceAndNotCleaned
+                                                                }
+                                                                .map(_.foldLeft(assertCompletes)(_ && _))
+                          _ <- clock.advance(2.second)
+                          _ <- TestClock.adjust(2.second)
+                          resourceCleanedAfterClean <- ZIO
+                                                         .foreach((0 until numResource).toList) { i =>
+                                                           observablesResource(i).assertAcquiredOnceAndCleaned
+                                                         }
+                                                         .map(_.foldLeft(assertCompletes)(_ && _))
+                          cacheSizeAfterClean <- cache.size
+                        } yield resourceNotCleanedYetBeforeClean && resourceCleanedAfterClean && assertTrue(
+                          cacheSizeAfterClean == 0
+                        )
+                      }
+                    }
+        } yield result
+      }
     ),
     suite("property base testing")(
       test(
