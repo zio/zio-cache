@@ -658,7 +658,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                           .flatMap { (scopedCache: ScopedCache[Unit, Nothing, Unit]) =>
                             for {
                               _            <- ZIO.scoped(scopedCache.get(key = ()).unit)
-                              _            <- fakeClock.advance(9.second)
+                              _            <- fakeClock.advance(8.second)
                               _            <- watchableLookup.lock
                               refreshFiber <- scopedCache.refresh(key = ()).fork
                               _ <-
@@ -745,135 +745,95 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                       }
           } yield result
         }
-      ),
-      suite("freeExpired")(
-        test("should properly clean and remove from cache expired resources") {
-          val numExpired    = 30
-          val numNotExpired = 50
-          for {
-            observablesResource <-
-              ZIO.foreach((0 until numExpired + numNotExpired).toList)(_ => ObservableResourceForTest.makeUnit)
-            clock <- MockedJavaClock.make
-            scopedCache =
-              ScopedCache.makeWith(
-                capacity = numExpired + numNotExpired,
-                scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
-                clock
-              )(timeToLive = { (_: Exit[Nothing, Unit]) => Duration.fromSeconds(4) })
-            result <- ZIO.scoped {
-                        scopedCache.flatMap { cache =>
-                          for {
-                            _ <- ZIO.foreachParDiscard((0 until numExpired))(n => ZIO.scoped(cache.get(n).unit))
-                            _ <- clock.advance(2.second)
-                            _ <- ZIO.foreachParDiscard((numExpired until numExpired + numNotExpired))(n =>
-                                   ZIO.scoped(cache.get(n).unit)
-                                 )
-                            _          <- clock.advance(3.second)
-                            numCleaned <- cache.freeExpired
-                            expiredResourceProperlyCleaned <- ZIO
-                                                                .foreach((0 until numExpired).toList)(i =>
-                                                                  observablesResource(i).assertAcquiredOnceAndCleaned
-                                                                )
-                                                                .map(_.foldLeft(assertCompletes)(_ && _))
-                            notExpiredResourceNotCleaned <-
-                              ZIO
-                                .foreach(
-                                  (numExpired until numExpired + numNotExpired).toList
-                                )(i => observablesResource(i).assertAcquiredOnceAndNotCleaned)
-                                .map(_.foldLeft(assertCompletes)(_ && _))
-                            size <- cache.size
-                          } yield assertTrue(
-                            numCleaned == numExpired && size == numNotExpired
-                          ) && expiredResourceProperlyCleaned && notExpiredResourceNotCleaned
-                        }
-                      }
-          } yield result
-        },
-        test("should correctly use potentially different TTL for different resources") {
-          val numResource = 3
-          for {
-            observablesResource <-
-              ZIO.foreach((0 until numResource).toList)(i => ObservableResourceForTest.make(i))
-            clock <- MockedJavaClock.make
-            scopedCache =
-              ScopedCache.makeWith(
-                capacity = numResource,
-                scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
-                clock
-              )(timeToLive = {
-                case Success(value) => value.second
-                case Failure(_)     => 0.second
-              })
-            result <- ZIO.scoped {
-                        scopedCache.flatMap { cache =>
-                          for {
-                            _                   <- ZIO.foreachParDiscard((0 until numResource))(n => ZIO.scoped(cache.get(n).unit))
-                            _                   <- clock.advance(500.milliseconds)
-                            freeAfter500ms      <- cache.freeExpired
-                            cacheSizeAfter500ms <- cache.size
-                            onlyCorrectResourceCleanedAt500ms <-
-                              observablesResource(0).assertAcquiredOnceAndCleaned && observablesResource(
-                                1
-                              ).assertAcquiredOnceAndNotCleaned && observablesResource(
-                                2
-                              ).assertAcquiredOnceAndNotCleaned
-                            _               <- clock.advance(1.second)
-                            freeAfter1500ms <- cache.freeExpired
-                            onlyCorrectResourceCleanedAt1500ms <-
-                              observablesResource(1).assertAcquiredOnceAndCleaned && observablesResource(
-                                2
-                              ).assertAcquiredOnceAndNotCleaned
-                            cacheSizeAfter1500ms        <- cache.size
-                            _                           <- clock.advance(1.second)
-                            freeAfter2500ms             <- cache.freeExpired
-                            cacheSizeAfter2500ms        <- cache.size
-                            allResourcesCleanedAt2500ms <- observablesResource(2).assertAcquiredOnceAndCleaned
-                          } yield assertTrue(
-                            freeAfter500ms == 1 && cacheSizeAfter500ms == 2 &&
-                              freeAfter1500ms == 1 && cacheSizeAfter1500ms == 1 &&
-                              freeAfter2500ms == 1 && cacheSizeAfter2500ms == 0
-                          ) && onlyCorrectResourceCleanedAt500ms && onlyCorrectResourceCleanedAt1500ms && allResourcesCleanedAt2500ms
-                        }
-                      }
-          } yield result
-        }
       )
     ),
-    suite("automatic clean expired resource")(
+    suite("automatic clean expired resource in background")(
       test("should every 1 second clean and remove expired resources") {
-        val numResource = 30
+        val numExpired    = 30
+        val numNotExpired = 50
         for {
           observablesResource <-
-            ZIO.foreach((0 until numResource).toList)(_ => ObservableResourceForTest.makeUnit)
+            ZIO.foreach((0 until numExpired + numNotExpired).toList)(_ => ObservableResourceForTest.makeUnit)
           clock <- MockedJavaClock.make
           scopedCache =
             ScopedCache.makeWith(
-              capacity = numResource,
+              capacity = numExpired + numNotExpired,
               scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
               clock
             )(timeToLive = { (_: Exit[Nothing, Unit]) => Duration.fromSeconds(4) })
           result <- ZIO.scoped {
                       scopedCache.flatMap { cache =>
                         for {
-                          _ <- ZIO.foreachParDiscard((0 until numResource))(n => ZIO.scoped(cache.get(n).unit))
+                          _ <- ZIO.foreachParDiscard((0 until numExpired))(n => ZIO.scoped(cache.get(n).unit))
+                          _ <- clock.advance(2.second)
+                          _ <- ZIO.foreachParDiscard((numExpired until numExpired + numNotExpired))(n =>
+                                 ZIO.scoped(cache.get(n).unit)
+                               )
                           _ <- clock.advance(3.second)
                           _ <- TestClock.adjust(3.second)
-                          resourceNotCleanedYetBeforeClean <- ZIO
-                                                                .foreach((0 until numResource).toList) { i =>
-                                                                  observablesResource(i).assertAcquiredOnceAndNotCleaned
-                                                                }
-                                                                .map(_.foldLeft(assertCompletes)(_ && _))
-                          _ <- clock.advance(2.second)
-                          _ <- TestClock.adjust(2.second)
-                          resourceCleanedAfterClean <- ZIO
-                                                         .foreach((0 until numResource).toList) { i =>
-                                                           observablesResource(i).assertAcquiredOnceAndCleaned
-                                                         }
-                                                         .map(_.foldLeft(assertCompletes)(_ && _))
-                          cacheSizeAfterClean <- cache.size
-                        } yield resourceNotCleanedYetBeforeClean && resourceCleanedAfterClean && assertTrue(
-                          cacheSizeAfterClean == 0
-                        )
+                          expiredResourceProperlyCleaned <- ZIO
+                                                              .foreach((0 until numExpired).toList)(i =>
+                                                                observablesResource(i).assertAcquiredOnceAndCleaned
+                                                              )
+                                                              .map(_.foldLeft(assertCompletes)(_ && _))
+                          notExpiredResourceNotCleaned <-
+                            ZIO
+                              .foreach(
+                                (numExpired until numExpired + numNotExpired).toList
+                              )(i => observablesResource(i).assertAcquiredOnceAndNotCleaned)
+                              .map(_.foldLeft(assertCompletes)(_ && _))
+                          size <- cache.size
+                        } yield assertTrue(
+                          size == numNotExpired
+                        ) && expiredResourceProperlyCleaned && notExpiredResourceNotCleaned
+                      }
+                    }
+        } yield result
+      },
+      test("should also work when different resources have different TTL") {
+        val numResource = 3
+        for {
+          observablesResource <-
+            ZIO.foreach((0 until numResource).toList)(i => ObservableResourceForTest.make(i))
+          clock <- MockedJavaClock.make
+          scopedCache =
+            ScopedCache.makeWith(
+              capacity = numResource,
+              scopedLookup = ScopedLookup((key: Int) => observablesResource(key).managed),
+              clock
+            )(timeToLive = {
+              case Success(value) => (value * 10).second
+              case Failure(_)     => 0.second
+            })
+          result <- ZIO.scoped {
+                      scopedCache.flatMap { cache =>
+                        for {
+                          _                  <- ZIO.foreachParDiscard((0 until numResource))(n => ZIO.scoped(cache.get(n).unit))
+                          _                  <- clock.advance(5.second)
+                          _                  <- TestClock.adjust(5.second)
+                          cacheSizeAfter5sec <- cache.size
+                          onlyCorrectResourceCleanedAt5s <-
+                            observablesResource(0).assertAcquiredOnceAndCleaned && observablesResource(
+                              1
+                            ).assertAcquiredOnceAndNotCleaned && observablesResource(
+                              2
+                            ).assertAcquiredOnceAndNotCleaned
+                          _ <- clock.advance(10.second)
+                          _ <- TestClock.adjust(10.second)
+                          onlyCorrectResourceCleanedAt15s <-
+                            observablesResource(1).assertAcquiredOnceAndCleaned && observablesResource(
+                              2
+                            ).assertAcquiredOnceAndNotCleaned
+                          cacheSizeAfter15s        <- cache.size
+                          _                        <- clock.advance(10.second)
+                          _                        <- TestClock.adjust(10.second)
+                          cacheSizeAfter25s        <- cache.size
+                          allResourcesCleanedAt25s <- observablesResource(2).assertAcquiredOnceAndCleaned
+                        } yield assertTrue(
+                          cacheSizeAfter5sec == 2 &&
+                            cacheSizeAfter15s == 1 &&
+                            cacheSizeAfter25s == 0
+                        ) && onlyCorrectResourceCleanedAt5s && onlyCorrectResourceCleanedAt15s && allResourcesCleanedAt25s
                       }
                     }
         } yield result

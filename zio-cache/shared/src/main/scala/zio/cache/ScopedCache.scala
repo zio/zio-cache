@@ -77,9 +77,6 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * Returns the approximate number of values in the cache.
    */
   def size: UIO[Int]
-
-  //package private for test
-  private[cache] def freeExpired: UIO[Int]
 }
 object ScopedCache {
 
