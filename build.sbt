@@ -1,16 +1,15 @@
 import Versions._
 import BuildHelper._
 
-enablePlugins(EcosystemPlugin)
+enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
 Global / onChangedBuildSource := ReloadOnSourceChanges
 
 inThisBuild(
   List(
-    organization       := "dev.zio",
-    homepage           := Some(url("https://zio.dev/zio-cache/")),
-    licenses           := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
-    crossScalaVersions := Seq(Scala211, Scala212, Scala213, Scala3),
+    name               := "ZIO Cache",
+    scalaVersion       := Scala213,
+    crossScalaVersions := Seq(Scala211, Scala212, Scala213),
     developers := List(
       Developer(
         "jdegoes",
@@ -18,7 +17,14 @@ inThisBuild(
         "john@degoes.net",
         url("http://degoes.net")
       )
-    )
+    ),
+    ciEnabledBranches := Seq("series/2.x"),
+    supportedScalaVersions :=
+      Map(
+        (zioCacheJVM / thisProject).value.id    -> (zioCacheJVM / crossScalaVersions).value,
+        (zioCacheJS / thisProject).value.id     -> (zioCacheJS / crossScalaVersions).value,
+        (zioCacheNative / thisProject).value.id -> (zioCacheNative / crossScalaVersions).value
+      )
   )
 )
 
@@ -32,14 +38,7 @@ lazy val root = project
   .in(file("."))
   .settings(
     publish / skip := true,
-    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library"),
-    ciEnabledBranches := Seq("series/2.x"),
-    supportedScalaVersions :=
-      Map(
-        (zioCacheJVM / thisProject).value.id    -> (zioCacheJVM / crossScalaVersions).value,
-        (zioCacheJS / thisProject).value.id     -> (zioCacheJS / crossScalaVersions).value,
-        (zioCacheNative / thisProject).value.id -> (zioCacheNative / crossScalaVersions).value
-      )
+    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
   )
   .aggregate(
     zioCacheJVM,
@@ -48,20 +47,10 @@ lazy val root = project
     benchmarks,
     docs
   )
-  .enablePlugins(ZioSbtCiPlugin)
 
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
-  .settings(
-    stdSettings(
-      name = "zio-cache",
-      packageName = "zio.cache",
-      scalaVersion = Scala213,
-      crossScalaVersions = Seq(Scala211, Scala212, Scala213),
-      enableCrossProject = true,
-      enableSilencer = true
-    )
-  )
+  .settings(stdSettings(packageName = "zio.cache", enableCrossProject = true, enableSilencer = true))
   .settings(silencerSettings)
   .settings(enableZIO(zioVersion, enableTesting = true))
   .settings(
@@ -72,12 +61,10 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
 
 lazy val zioCacheJS = zioCache.js
   .settings(name := "zio-cache-js", libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
-  .settings(crossScalaVersions := Seq(Scala211, Scala212, Scala213))
   .settings(scalaJSUseMainModuleInitializer := true)
 
 lazy val zioCacheJVM = zioCache.jvm
-  .settings(enableScala3(Scala3, Scala213))
-  .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
+  .settings(crossScalaVersions += Scala3, libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
   .settings(scalaReflectTestSettings(Scala213))
 
 lazy val zioCacheNative = zioCache.native
@@ -90,14 +77,7 @@ lazy val zioCacheNative = zioCache.native
 
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
-  .settings(
-    stdSettings(
-      name = "zio-cache-benchmark",
-      crossScalaVersions = Seq(Scala211, Scala212, Scala213),
-      packageName = "zio.cache",
-      scalaVersion = Scala213
-    )
-  )
+  .settings(stdSettings(packageName = "zio.cache"))
   .settings(
     publish / skip := true
   )
@@ -111,7 +91,7 @@ lazy val docs = project
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
     crossScalaVersions                         := Seq(Scala212, Scala213),
-    projectName                                := "ZIO Cache",
+    projectName                                := (ThisBuild / name).value,
     mainModuleName                             := (zioCacheJVM / moduleName).value,
     projectStage                               := ProjectStage.Development,
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
