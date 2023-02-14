@@ -110,19 +110,15 @@ object ScopedCache {
   )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment with Scope, ScopedCache[Key, Error, Value]] =
     ZIO
       .acquireRelease(buildWith(capacity, scopedLookup, clock)(timeToLive))(_.invalidateAll)
-      .flatMap { scopedCache =>
+      .tap { scopedCache =>
         runFreeExpiredResourcesLoopInBackground(scopedCache)
-          .as(scopedCache)
       }
 
   private def runFreeExpiredResourcesLoopInBackground[Key, Environment, Error, Value](
     scopedCache: ScopedCacheImplementation[Key, Error, Value, Environment]
   ): URIO[Scope, Fiber.Runtime[Nothing, Long]] = {
     val cleaningInterval = 1.second
-    (scopedCache.freeExpired *> ZIO.sleep(cleaningInterval))
-      .repeat(Schedule.forever)
-      .interruptible
-      .forkScoped
+    (scopedCache.freeExpired *> ZIO.sleep(cleaningInterval)).forever.interruptible.forkScoped
   }
 
   private def buildWith[Key, Environment, Error, Value](
