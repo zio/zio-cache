@@ -99,7 +99,7 @@ object ScopedCache {
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
     scopedLookup: ScopedLookup[Key, Environment, Error, Value]
-  )(timeToLive: Exit[Error, Value] => Duration): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment with Scope, ScopedCache[Key, Error, Value]] =
     makeWith(capacity, scopedLookup, Clock.systemUTC())(timeToLive)
 
   //util for test because it allow to inject a mocked Clock
@@ -107,7 +107,7 @@ object ScopedCache {
     capacity: Int,
     scopedLookup: ScopedLookup[Key, Environment, Error, Value],
     clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): ZIO[Environment with Scope, Nothing, ScopedCache[Key, Error, Value]] =
+  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment with Scope, ScopedCache[Key, Error, Value]] =
     ZIO
       .acquireRelease(buildWith(capacity, scopedLookup, clock)(timeToLive))(_.invalidateAll)
       .flatMap { scopedCache =>
@@ -131,7 +131,7 @@ object ScopedCache {
     clock: Clock
   )(
     timeToLive: Exit[Error, Value] => Duration
-  ): URIO[Environment, ScopedCacheImplementation[Key, Error, Value, Environment]] =
+  ): URIO[Environment, ScopedCacheImplementation[Key, Environment, Error, Value]] =
     ZIO
       .environment[Environment]
       .map { environment =>

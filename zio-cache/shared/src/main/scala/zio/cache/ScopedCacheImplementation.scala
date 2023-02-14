@@ -10,7 +10,7 @@ import java.util
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
 
-private[cache] class ScopedCacheImplementation[Key, Error, Value, Environment](
+private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
   capacity: Int,
   scopedLookup: ScopedLookup[Key, Environment, Error, Value],
   clock: Clock,
