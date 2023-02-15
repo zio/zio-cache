@@ -19,7 +19,7 @@ package zio.cache
 import zio._
 import zio.internal.MutableConcurrentQueue
 
-import java.time.{Clock, Duration, Instant}
+import java.time.{Duration, Instant}
 import java.util
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
@@ -100,16 +100,8 @@ object ScopedCache {
     capacity: Int,
     scopedLookup: ScopedLookup[Key, Environment, Error, Value]
   )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment with Scope, ScopedCache[Key, Error, Value]] =
-    makeWith(capacity, scopedLookup, Clock.systemUTC())(timeToLive)
-
-  //util for test because it allow to inject a mocked Clock
-  private[cache] def makeWith[Key, Environment, Error, Value](
-    capacity: Int,
-    scopedLookup: ScopedLookup[Key, Environment, Error, Value],
-    clock: Clock
-  )(timeToLive: Exit[Error, Value] => Duration): URIO[Environment with Scope, ScopedCache[Key, Error, Value]] =
     ZIO
-      .acquireRelease(buildWith(capacity, scopedLookup, clock)(timeToLive))(_.invalidateAll)
+      .acquireRelease(buildWith(capacity, scopedLookup)(timeToLive))(_.invalidateAll)
       .tap { scopedCache =>
         runFreeExpiredResourcesLoopInBackground(scopedCache)
       }
@@ -123,15 +115,14 @@ object ScopedCache {
 
   private def buildWith[Key, Environment, Error, Value](
     capacity: Int,
-    scopedLookup: ScopedLookup[Key, Environment, Error, Value],
-    clock: Clock
+    scopedLookup: ScopedLookup[Key, Environment, Error, Value]
   )(
     timeToLive: Exit[Error, Value] => Duration
   ): URIO[Environment, ScopedCacheImplementation[Key, Environment, Error, Value]] =
     ZIO
       .environment[Environment]
       .map { environment =>
-        new ScopedCacheImplementation(capacity, scopedLookup, clock, timeToLive, environment)
+        new ScopedCacheImplementation(capacity, scopedLookup, timeToLive, environment)
       }
 
   /**
