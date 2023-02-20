@@ -60,8 +60,12 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   )
 
 lazy val zioCacheJS = zioCache.js
-  .settings(name := "zio-cache-js", libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
-  .settings(scalaJSUseMainModuleInitializer := true)
+  .settings(
+    name := "zio-cache-js",
+    crossScalaVersions -= Scala211,
+    libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test,
+    scalaJSUseMainModuleInitializer   := true
+  )
 
 lazy val zioCacheJVM = zioCache.jvm
   .settings(crossScalaVersions += Scala3, libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
