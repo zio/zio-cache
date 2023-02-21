@@ -50,7 +50,9 @@ lazy val root = project
 
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
-  .settings(stdSettings(packageName = "zio.cache", enableCrossProject = true, enableSilencer = true))
+  .settings(
+    stdSettings(name = "zio-cache", packageName = Some("zio.cache"), enableCrossProject = true, enableSilencer = true)
+  )
   .settings(silencerSettings)
   .settings(enableZIO(zioVersion, enableTesting = true))
   .settings(
@@ -81,7 +83,7 @@ lazy val zioCacheNative = zioCache.native
 
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
-  .settings(stdSettings(packageName = "zio.cache"))
+  .settings(stdSettings(name = "zio-cache-benchmarks", packageName = Some("zio.cache")))
   .settings(
     publish / skip := true
   )
