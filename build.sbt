@@ -8,8 +8,8 @@ Global / onChangedBuildSource := ReloadOnSourceChanges
 inThisBuild(
   List(
     name               := "ZIO Cache",
-    scalaVersion       := Scala213,
-    crossScalaVersions := Seq(Scala211, Scala212, Scala213),
+    scalaVersion       := scala213.value,
+    crossScalaVersions := Seq(scala211.value, scala212.value, scala213.value),
     developers := List(
       Developer(
         "jdegoes",
@@ -64,18 +64,18 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
 lazy val zioCacheJS = zioCache.js
   .settings(
     name := "zio-cache-js",
-    crossScalaVersions -= Scala211,
+    crossScalaVersions -= scala211.value,
     libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test,
     scalaJSUseMainModuleInitializer   := true
   )
 
 lazy val zioCacheJVM = zioCache.jvm
-  .settings(crossScalaVersions += Scala3, libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
-  .settings(scalaReflectTestSettings(Scala213))
+  .settings(crossScalaVersions += scala3.value, libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
+  .settings(scalaReflectTestSettings)
 
 lazy val zioCacheNative = zioCache.native
   .settings(
-    crossScalaVersions -= Scala211,
+    crossScalaVersions -= scala211.value,
     Test / test             := (Test / compile).value,
     doc / skip              := true,
     Compile / doc / sources := Seq.empty
@@ -96,7 +96,7 @@ lazy val docs = project
     moduleName := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
-    crossScalaVersions                         := Seq(Scala212, Scala213),
+    crossScalaVersions                         -= scala211.value,
     projectName                                := (ThisBuild / name).value,
     mainModuleName                             := (zioCacheJVM / moduleName).value,
     projectStage                               := ProjectStage.Development,
