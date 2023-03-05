@@ -3,13 +3,9 @@ import BuildHelper._
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
-Global / onChangedBuildSource := ReloadOnSourceChanges
-
 inThisBuild(
   List(
     name               := "ZIO Cache",
-    scalaVersion       := scala213.value,
-    crossScalaVersions := Seq(scala211.value, scala212.value, scala213.value),
     developers := List(
       Developer(
         "jdegoes",
@@ -51,10 +47,10 @@ lazy val root = project
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
-    stdSettings(name = "zio-cache", packageName = Some("zio.cache"), enableCrossProject = true, enableSilencer = true)
+    stdSettings(name = "zio-cache", packageName = Some("zio.cache"), enableCrossProject = true)
   )
   .settings(silencerSettings)
-  .settings(enableZIO(zioVersion, enableTesting = true))
+  .settings(enableZIO())
   .settings(
     libraryDependencies ++= Seq(
       "org.scala-lang.modules" %% "scala-collection-compat" % ScalaCollectionCompatVersion
@@ -65,21 +61,18 @@ lazy val zioCacheJS = zioCache.js
   .settings(
     name := "zio-cache-js",
     crossScalaVersions -= scala211.value,
-    libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test,
+    libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion.value % Test,
     scalaJSUseMainModuleInitializer   := true
   )
 
 lazy val zioCacheJVM = zioCache.jvm
-  .settings(crossScalaVersions += scala3.value, libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion % Test)
+  .settings(scala3Settings)
+  .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion.value % Test)
   .settings(scalaReflectTestSettings)
 
 lazy val zioCacheNative = zioCache.native
-  .settings(
-    crossScalaVersions -= scala211.value,
-    Test / test             := (Test / compile).value,
-    doc / skip              := true,
-    Compile / doc / sources := Seq.empty
-  )
+  .settings(nativeSettings)
+  .settings(crossScalaVersions -= scala211.value)
 
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))

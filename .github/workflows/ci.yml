@@ -31,8 +31,6 @@ jobs:
         distribution: temurin
         java-version: '17'
         check-latest: true
-    - name: Check if the README file is up to date
-      run: sbt  docs/checkReadme
     - name: Check if the site workflow is up to date
       run: sbt  checkGithubWorkflow
     - name: Check artifacts build process
@@ -55,7 +53,7 @@ jobs:
         java-version: '17'
         check-latest: true
     - name: Lint
-      run: sbt lint
+      run: sbt  lint
   test:
     name: Test
     runs-on: ubuntu-latest
@@ -74,8 +72,10 @@ jobs:
         - ++3.2.2 zioCacheJVM
         - ++2.12.17 zioCacheJS
         - ++2.13.10 zioCacheJS
+        - ++3.2.2 zioCacheJS
         - ++2.12.17 zioCacheNative
         - ++2.13.10 zioCacheNative
+        - ++3.2.2 zioCacheNative
     steps:
     - name: Setup Scala
       uses: actions/setup-java@v3.10.0
@@ -88,7 +88,18 @@ jobs:
       with:
         fetch-depth: '0'
     - name: Test
-      run: sbt ${{ matrix.scala-project }}/test
+      run: sbt  ${{ matrix.scala-project }}/test
+  ci:
+    name: CI
+    runs-on: ubuntu-latest
+    continue-on-error: false
+    needs:
+    - lint
+    - test
+    - build
+    steps:
+    - name: Report Successful CI
+      run: echo "ci passed"
   release:
     name: Release
     runs-on: ubuntu-latest
@@ -110,7 +121,7 @@ jobs:
         java-version: '17'
         check-latest: true
     - name: Release
-      run: sbt ci-release
+      run: sbt  ci-release
       env:
         PGP_PASSPHRASE: ${{ secrets.PGP_PASSPHRASE }}
         PGP_SECRET: ${{ secrets.PGP_SECRET }}
