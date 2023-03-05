@@ -62,7 +62,8 @@ lazy val zioCacheJS = zioCache.js
     name := "zio-cache-js",
     crossScalaVersions -= scala211.value,
     libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion.value % Test,
-    scalaJSUseMainModuleInitializer   := true
+    scalaJSUseMainModuleInitializer   := true,
+    scalajs    
   )
 
 lazy val zioCacheJVM = zioCache.jvm
@@ -98,3 +99,13 @@ lazy val docs = project
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
+
+lazy val scalajs: Seq[Setting[_]] =
+  Seq(
+    scalacOptions ++= {
+      if (scalaVersion.value == scala3.value) {
+        Seq("-scalajs")
+      } else Seq.empty
+    }
+  )
+
