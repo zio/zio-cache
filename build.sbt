@@ -53,7 +53,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   )
 
 lazy val zioCacheJS = zioCache.js
-  .settings(scalaJSUseMainModuleInitializer := true)
+  .settings(crossScalaVersions -= scala211.value, scalaJSUseMainModuleInitializer := true)
 
 lazy val zioCacheJVM = zioCache.jvm
   .settings(
