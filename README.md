@@ -124,7 +124,7 @@ Number of cache misses: 1
 
 ## Documentation
 
-Learn more on the [ZIO Cache homepage](https://zio.dev/zio-cache/)!
+Learn more on the [ZIO Cache homepage](https://zio.dev/zio-cache)!
 
 ## Contributing
 
