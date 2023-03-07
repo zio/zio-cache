@@ -70,7 +70,6 @@ jobs:
         - ++2.12.17 zioCacheJVM
         - ++2.13.10 zioCacheJVM
         - ++3.2.2 zioCacheJVM
-        - ++2.11.12 zioCacheJS
         - ++2.12.17 zioCacheJS
         - ++2.13.10 zioCacheJS
         - ++2.12.17 zioCacheNative
