@@ -8,7 +8,7 @@ inThisBuild(
     name := "ZIO Cache",
     crossScalaVersions -= scala3.value,
     sbtBuildOptions  := List("-J-XX:+UseG1GC", "-J-Xmx4g", "-J-Xms2g", "-J-Xss16m"),
-    ciBackgroundJobs := Seq("free --si -tmws 10h"),
+    ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
       Developer(
         "jdegoes",
