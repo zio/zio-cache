@@ -5,7 +5,8 @@ enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
 inThisBuild(
   List(
-    name               := "ZIO Cache",
+    name := "ZIO Cache",
+    crossScalaVersions -= scala3.value,
     developers := List(
       Developer(
         "jdegoes",
@@ -26,10 +27,6 @@ inThisBuild(
 
 addCommandAlias("benchmark", "benchmarks/Jmh/run")
 
-addCommandAlias("testJVM", ";zioCacheJVM/test")
-addCommandAlias("testJS", ";zioCacheJS/test")
-addCommandAlias("testNative", ";zioCacheNative/test:compile")
-
 lazy val root = project
   .in(file("."))
   .settings(
@@ -47,33 +44,29 @@ lazy val root = project
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
-    stdSettings(name = "zio-cache", packageName = Some("zio.cache"), enableCrossProject = true)
-  )
-  .settings(silencerSettings)
-  .settings(enableZIO())
-  .settings(
+    stdSettings(name = "zio-cache", packageName = Some("zio.cache"), enableCrossProject = true),
+    silencerSettings,
+    enableZIO(),
     libraryDependencies ++= Seq(
       "org.scala-lang.modules" %% "scala-collection-compat" % ScalaCollectionCompatVersion
     )
   )
 
 lazy val zioCacheJS = zioCache.js
-  .settings(
-    name := "zio-cache-js",
-    crossScalaVersions -= scala211.value,
-    libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion.value % Test,
-    scalaJSUseMainModuleInitializer   := true,
-    scalajs    
-  )
+  .settings(scalaJSUseMainModuleInitializer := true)
 
 lazy val zioCacheJVM = zioCache.jvm
-  .settings(scala3Settings)
-  .settings(libraryDependencies += "dev.zio" %%% "zio-test-sbt" % zioVersion.value % Test)
-  .settings(scalaReflectTestSettings)
+  .settings(
+    crossScalaVersions += scala3.value,
+    scala3Settings,
+    scalaReflectTestSettings
+  )
 
 lazy val zioCacheNative = zioCache.native
-  .settings(nativeSettings)
-  .settings(crossScalaVersions -= scala211.value)
+  .settings(
+    nativeSettings,
+    crossScalaVersions -= scala211.value
+  )
 
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
@@ -99,13 +92,3 @@ lazy val docs = project
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
-
-lazy val scalajs: Seq[Setting[_]] =
-  Seq(
-    scalacOptions ++= {
-      if (scalaVersion.value == scala3.value) {
-        Seq("-scalajs")
-      } else Seq.empty
-    }
-  )
-
