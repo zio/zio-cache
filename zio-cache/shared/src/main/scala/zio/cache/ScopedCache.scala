@@ -119,11 +119,13 @@ object ScopedCache {
   )(
     timeToLive: Exit[Error, Value] => Duration
   ): URIO[Environment, ScopedCacheImplementation[Key, Environment, Error, Value]] =
-    ZIO
-      .environment[Environment]
-      .map { environment =>
-        new ScopedCacheImplementation(capacity, scopedLookup, timeToLive, environment)
-      }
+    ZIO.clock.flatMap { clock =>
+      ZIO
+        .environment[Environment]
+        .map { environment =>
+          new ScopedCacheImplementation(capacity, scopedLookup, timeToLive, clock, environment)
+        }
+    }
 
   /**
    * A `MapValue` represents a value in the cache. A value may either be
