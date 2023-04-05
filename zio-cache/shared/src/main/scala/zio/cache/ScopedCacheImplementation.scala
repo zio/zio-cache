@@ -3,9 +3,9 @@ package zio.cache
 import zio.cache.ScopedCache.Finalizer
 import zio.cache.ScopedCacheImplementation.{CacheState, MapValue}
 import zio.internal.MutableConcurrentQueue
-import zio.{Exit, IO, Scope, UIO, ZEnvironment, ZIO}
+import zio.{Clock, Exit, IO, Scope, UIO, Unsafe, ZEnvironment, ZIO}
 
-import java.time.{Clock, Duration, Instant}
+import java.time.{Duration, Instant}
 import java.util
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
@@ -13,8 +13,8 @@ import scala.jdk.CollectionConverters._
 private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
   capacity: Int,
   scopedLookup: ScopedLookup[Key, Environment, Error, Value],
-  clock: Clock,
   timeToLive: Exit[Error, Value] => Duration,
+  clock: Clock,
   environment: ZEnvironment[Environment]
 ) extends ScopedCache[Key, Error, Value] {
   private val cacheState = CacheState.initial[Key, Error, Value]()
@@ -86,7 +86,7 @@ private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
       }
     }
 
-  def freeExpired: UIO[Int] = ZIO.suspendSucceed {
+  def freeExpired: UIO[Int] = ZIO.suspendSucceedUnsafe { implicit unsafe =>
     var expiredKey = List.empty[Key]
     map.entrySet().forEach { entry =>
       entry.getValue match {
@@ -106,7 +106,7 @@ private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
 
   override def get(k: Key): ZIO[Scope, Error, Value] =
     lookupValueOf(k).memoize.flatMap { lookupValue =>
-      ZIO.suspendSucceed {
+      ZIO.suspendSucceedUnsafe { implicit unsafe =>
         var key: MapKey[Key] = null
         var value            = map.get(k)
         if (value eq null) {
@@ -155,7 +155,7 @@ private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
         case MapValue.Pending(_, scopedEffect) =>
           scopedEffect
         case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
-          if (hasExpired(ttl)) {
+          if (hasExpired(ttl)(Unsafe.unsafe)) {
             ZIO.succeed(get(k))
           } else {
             if (map.replace(k, completeResult, MapValue.Refreshing(scoped, completeResult))) {
@@ -200,7 +200,7 @@ private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
                     } yield (exit, scope.close(_)))
                       .onInterrupt(ZIO.succeed(map.remove(key)))
                       .flatMap { case (exit, release) =>
-                        val now       = Instant.now(clock)
+                        val now       = Unsafe.unsafe(clock.unsafe.instant()(_))
                         val expiredAt = now.plus(timeToLive(exit))
                         exit match {
                           case Exit.Success(value) =>
@@ -236,8 +236,8 @@ private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
                       .memoize
   } yield scopedEffect.flatten
 
-  private def hasExpired(timeToLive: Instant) =
-    Instant.now(clock).isAfter(timeToLive)
+  private def hasExpired(timeToLive: Instant)(implicit unsafe: Unsafe) =
+    clock.unsafe.instant().isAfter(timeToLive)
 }
 
 object ScopedCacheImplementation {
