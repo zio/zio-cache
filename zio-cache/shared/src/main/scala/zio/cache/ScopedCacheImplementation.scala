@@ -155,7 +155,7 @@ private[cache] class ScopedCacheImplementation[Key, Environment, Error, Value](
         case MapValue.Pending(_, scopedEffect) =>
           scopedEffect
         case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
-          if (Unsafe.unsafe(hasExpired(ttl)(_))) {
+          if (hasExpired(ttl)(Unsafe.unsafe)) {
             ZIO.succeed(get(k))
           } else {
             if (map.replace(k, completeResult, MapValue.Refreshing(scoped, completeResult))) {
