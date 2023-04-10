@@ -2,7 +2,7 @@ package zio.cache
 
 import zio.test.Assertion._
 import zio.test._
-import zio.{Duration, Ref, Scope, UIO, ZIO, duration2DurationOps}
+import zio.{Chunk, Duration, Ref, Scope, UIO, ZIO, duration2DurationOps}
 
 object CacheSpec extends ZIOSpecDefault {
 
@@ -141,6 +141,15 @@ object CacheSpec extends ZIOSpecDefault {
           _     <- ZIO.foreachDiscard(1 to 100)(cache.get)
           size  <- cache.size
         } yield assertTrue(size == 10)
+      }
+    },
+    test("getAll") {
+      val lookup = Lookup.batched((keys: Iterable[Int]) => ZIO.succeed(Chunk.fromIterable(keys.map(n => n * n))))
+      check(Gen.int) { salt =>
+        for {
+          cache  <- Cache.make(10, Duration.Infinity, lookup)
+          values <- cache.getAll(1 to 10)
+        } yield assertTrue(values == Chunk(1, 4, 9, 16, 25, 36, 49, 64, 81, 100))
       }
     }
   )

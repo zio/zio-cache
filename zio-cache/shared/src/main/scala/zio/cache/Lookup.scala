@@ -16,7 +16,7 @@
 
 package zio.cache
 
-import zio.ZIO
+import zio.{Chunk, ZIO}
 
 /**
  * A `Lookup` represents a lookup function that, given a key of type `Key`, can
@@ -28,12 +28,52 @@ import zio.ZIO
  * given a key. Given any effectual function you can convert it to a lookup
  * function for a cache by using the `Lookup` constructor.
  */
-final case class Lookup[-Key, -Environment, +Error, +Value](lookup: Key => ZIO[Environment, Error, Value])
-    extends (Key => ZIO[Environment, Error, Value]) {
+sealed trait Lookup[-Key, -Environment, +Error, +Value] extends (Key => ZIO[Environment, Error, Value]) {
 
   /**
    * Computes a value for the specified key or fails with an error.
    */
+  def lookup(key: Key): ZIO[Environment, Error, Value]
+
+  /**
+   * Computes a value for the specified keys or fails with an error.
+   */
+  def lookupAll(keys: Iterable[Key]): ZIO[Environment, Error, Chunk[Value]]
+
   def apply(key: Key): ZIO[Environment, Error, Value] =
     lookup(key)
+}
+
+object Lookup {
+
+  /**
+   * Constructs a lookup from a function to look up a single key.
+   */
+  def apply[Key, Environment, Error, Value](
+    f: Key => ZIO[Environment, Error, Value]
+  ): Lookup[Key, Environment, Error, Value] =
+    full(f, keys => ZIO.foreach(Chunk.fromIterable(keys))(f))
+
+  /**
+   * Constructs a lookup from a function to look up a batch of keys.
+   */
+  def batched[Key, Environment, Error, Value](
+    f: Iterable[Key] => ZIO[Environment, Error, Chunk[Value]]
+  ): Lookup[Key, Environment, Error, Value] =
+    full(key => f(Chunk.single(key)).map(_.head), f)
+
+  /**
+   * Constructs a lookup from separate functions to look up a single key and
+   * a batch of keys.
+   */
+  def full[Key, Environment, Error, Value](
+    lookup0: Key => ZIO[Environment, Error, Value],
+    lookupAll0: Iterable[Key] => ZIO[Environment, Error, Chunk[Value]]
+  ): Lookup[Key, Environment, Error, Value] =
+    new Lookup[Key, Environment, Error, Value] {
+      def lookup(key: Key): ZIO[Environment, Error, Value] =
+        lookup0(key)
+      def lookupAll(keys: Iterable[Key]): ZIO[Environment, Error, Chunk[Value]] =
+        lookupAll0(keys)
+    }
 }
