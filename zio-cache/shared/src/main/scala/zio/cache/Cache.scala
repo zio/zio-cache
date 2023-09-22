@@ -268,7 +268,8 @@ object Cache {
                   value = map.putIfAbsent(k, MapValue.Pending(new MapKey(k), promise))
                 }
                 val result = if (value eq null) {
-                  lookupValueOf(in, promise)
+                  val rollbackResultIfError = if (rollbackIfError) Right(None) else Left(())
+                  lookupValueOf(in, promise, rollbackResultIfError)
                 } else {
                   value match {
                     case MapValue.Pending(_, promiseInProgress) =>
@@ -279,8 +280,7 @@ object Cache {
                         get(in)
                       } else {
                         // Only trigger the lookup if we're still the current value, `completedResult`
-                        val rollbackResultIfError: Option[MapValue.Complete[Key, Error, Value]] =
-                          if (rollbackIfError) Some(completedResult) else None
+                        val rollbackResultIfError = if (rollbackIfError) Right(Some(completedResult)) else Left(())
                         lookupValueOf(in, promise, rollbackResultIfError).when {
                           map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
                         }
@@ -309,7 +309,12 @@ object Cache {
             private def lookupValueOf(
               in: In,
               promise: Promise[Error, Value],
-              rollbackResultIfError: Option[MapValue.Complete[Key, Error, Value]] = None
+              /**
+               * Left(()): Put the lookup result.
+               * Right(None): Remove key if there is a error.
+               * Right(Some(rollbackResult)): Rollback if there is a error.
+               */
+              rollbackResultIfError: Either[Unit, Option[MapValue.Complete[Key, Error, Value]]] = Left(())
             ): IO[Error, Value] =
               ZIO.suspendSucceed {
                 val key = keyBy(in)
@@ -320,12 +325,17 @@ object Cache {
                     val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
                     val entryStats = EntryStats(now)
 
-                    rollbackResultIfError match {
-                      case Some(rollbackResult) if exit.isFailure =>
-                        map.put(key, rollbackResult)
-                      case _ =>
-                        map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
-                    }
+                    if (exit.isSuccess)
+                      map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+                    else
+                      rollbackResultIfError match {
+                        case Left(()) =>
+                          map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+                        case Right(None) =>
+                          map.remove(key)
+                        case Right(Some(rollbackResult)) =>
+                          map.put(key, rollbackResult)
+                      }
 
                     promise.done(exit) *> ZIO.done(exit)
                   }

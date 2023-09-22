@@ -194,6 +194,33 @@ object CacheSpec extends ZIOSpecDefault {
           assert(val2)(isRight(equalTo(5))) &&
           assert(val3)(isRight(equalTo(5))) &&
           assert(val4)(isRight(equalTo(7)))
+      },
+      test("should update only if it is a value when the key doesn't exist in the cache") {
+
+        val error = new RuntimeException("Must be a multiple of 3")
+
+        def inc(n: Int) = n + 1
+
+        def retrieve(number: Ref[Int])(key: Int) =
+          number
+            .updateAndGet(inc)
+            .flatMap {
+              case n if n % 3 == 0 =>
+                ZIO.fail(error)
+              case n =>
+                ZIO.succeed(key * n)
+            }
+
+        val seed = 2
+        val key  = 1
+        val cap  = 30
+        for {
+          ref    <- Ref.make(seed)
+          cache  <- Cache.make(cap, Duration.Infinity, Lookup(retrieve(ref)))
+          count0 <- cache.size
+          _      <- ZIO.foreachDiscard(1 to cap)(key => cache.refreshValue(key).either)
+          count1 <- cache.size
+        } yield assertTrue(count0 == 0) && assertTrue(count1 == cap / 3 * 2)
       }
     ),
     test("size") {
