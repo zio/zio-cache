@@ -76,7 +76,13 @@ abstract class Cache[-Key, +Error, +Value] {
    * by the lookup function. Additionally, `refresh` always triggers the
    * lookup function, disregarding the last `Error`.
    */
-  def refresh(key: Key, rollbackIfFailed: Boolean = false): IO[Error, Unit]
+  def refresh(key: Key): IO[Error, Unit]
+
+  /**
+   * Computes the value associated with the specified key, with the lookup
+   * function, and puts it in the cache only if it is a value, not an error.
+   */
+  def refreshValue(key: Key): IO[Error, Unit]
 
   /**
    * Invalidates the value associated with the specified key.
@@ -247,7 +253,13 @@ object Cache {
                 }
               }
 
-            override def refresh(in: In, rollbackIfFailed: Boolean = false): IO[Error, Unit] =
+            def refresh(in: In): IO[Error, Unit] =
+              refresh(in, rollbackIfError = false)
+
+            def refreshValue(in: In): IO[Error, Unit] =
+              refresh(in, rollbackIfError = true)
+
+            private def refresh(in: In, rollbackIfError: Boolean): IO[Error, Unit] =
               ZIO.suspendSucceedUnsafe { implicit u =>
                 val k       = keyBy(in)
                 val promise = newPromise()
@@ -267,9 +279,9 @@ object Cache {
                         get(in)
                       } else {
                         // Only trigger the lookup if we're still the current value, `completedResult`
-                        val rollbackValueIfFailed: Option[MapValue.Complete[Key, Error, Value]] =
-                          if (rollbackIfFailed) Some(completedResult) else None
-                        lookupValueOf(in, promise, rollbackValueIfFailed).when {
+                        val rollbackResultIfError: Option[MapValue.Complete[Key, Error, Value]] =
+                          if (rollbackIfError) Some(completedResult) else None
+                        lookupValueOf(in, promise, rollbackResultIfError).when {
                           map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
                         }
                       }
@@ -297,7 +309,7 @@ object Cache {
             private def lookupValueOf(
               in: In,
               promise: Promise[Error, Value],
-              rollbackValueIfFailed: Option[MapValue.Complete[Key, Error, Value]] = None
+              rollbackResultIfError: Option[MapValue.Complete[Key, Error, Value]] = None
             ): IO[Error, Value] =
               ZIO.suspendSucceed {
                 val key = keyBy(in)
@@ -308,10 +320,10 @@ object Cache {
                     val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
                     val entryStats = EntryStats(now)
 
-                    rollbackValueIfFailed match {
-                      case Some(rollbackValue) if exit.isFailure =>
-                        map.put(key, rollbackValue)
-                        promise.done(rollbackValue.exit) *> ZIO.done(exit)
+                    rollbackResultIfError match {
+                      case Some(rollbackResult) if exit.isFailure =>
+                        map.put(key, rollbackResult)
+                        promise.done(rollbackResult.exit) *> ZIO.done(exit)
                       case _ =>
                         map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
                         promise.done(exit) *> ZIO.done(exit)
