@@ -311,8 +311,8 @@ object Cache {
               promise: Promise[Error, Value],
               /**
                * Left(()): Put the lookup result.
-               * Right(None): Remove key if there is a error.
-               * Right(Some(rollbackResult)): Rollback if there is a error.
+               * Right(None): Remove key if there is an error.
+               * Right(Some(rollbackResult)): Rollback if there is an error.
                */
               rollbackResultIfError: Either[Unit, Option[MapValue.Complete[Key, Error, Value]]] = Left(())
             ): IO[Error, Value] =
