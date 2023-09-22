@@ -323,11 +323,11 @@ object Cache {
                     rollbackResultIfError match {
                       case Some(rollbackResult) if exit.isFailure =>
                         map.put(key, rollbackResult)
-                        promise.done(rollbackResult.exit) *> ZIO.done(exit)
                       case _ =>
                         map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
-                        promise.done(exit) *> ZIO.done(exit)
                     }
+
+                    promise.done(exit) *> ZIO.done(exit)
                   }
                   .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
               }
