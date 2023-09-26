@@ -103,9 +103,10 @@ object Cache {
   def make[Key, Environment, Error, Value](
     capacity: Int,
     timeToLive: Duration,
-    lookup: Lookup[Key, Environment, Error, Value]
+    lookup: Lookup[Key, Environment, Error, Value],
+    storeOnlyIfValue: Boolean = false
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
-    makeWith(capacity, lookup)(_ => timeToLive)
+    makeWith(capacity, lookup, storeOnlyIfValue)(_ => timeToLive)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -114,11 +115,12 @@ object Cache {
    */
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
-    lookup: Lookup[Key, Environment, Error, Value]
+    lookup: Lookup[Key, Environment, Error, Value],
+    storeOnlyIfValue: Boolean = false
   )(
     timeToLive: Exit[Error, Value] => Duration
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
-    makeWithKey(capacity, lookup)(timeToLive, identity)
+    makeWithKey(capacity, lookup, storeOnlyIfValue)(timeToLive, identity)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -132,7 +134,8 @@ object Cache {
    */
   def makeWithKey[In, Key, Environment, Error, Value](
     capacity: Int,
-    lookup: Lookup[In, Environment, Error, Value]
+    lookup: Lookup[In, Environment, Error, Value],
+    storeOnlyIfValue: Boolean = false
   )(
     timeToLive: Exit[Error, Value] => Duration,
     keyBy: In => Key
@@ -230,7 +233,12 @@ object Cache {
                         map.remove(k, value)
                         get(in)
                       } else {
-                        ZIO.done(exit)
+                        exit match {
+                          case Left(exit) =>
+                            ZIO.done(exit)
+                          case Right(value) =>
+                            ZIO.done(Exit.Success(value))
+                        }
                       }
                     case MapValue.Refreshing(
                           promiseInProgress,
@@ -241,7 +249,12 @@ object Cache {
                       if (hasExpired(ttl)) {
                         promiseInProgress.await
                       } else {
-                        ZIO.done(currentResult)
+                        currentResult match {
+                          case Left(exit) =>
+                            ZIO.done(exit)
+                          case Right(value) =>
+                            ZIO.done(Exit.Success(value))
+                        }
                       }
                   }
                 }
@@ -266,8 +279,9 @@ object Cache {
                         map.remove(k, value)
                         get(in)
                       } else {
+                        val rollbackResultIfError = if (storeOnlyIfValue) Some(completedResult) else None
                         // Only trigger the lookup if we're still the current value, `completedResult`
-                        lookupValueOf(in, promise).when {
+                        lookupValueOf(in, promise, rollbackResultIfError).when {
                           map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
                         }
                       }
@@ -292,7 +306,11 @@ object Cache {
             def size(implicit trace: Trace): UIO[Int] =
               ZIO.succeed(map.size)
 
-            private def lookupValueOf(in: In, promise: Promise[Error, Value]): IO[Error, Value] =
+            private def lookupValueOf(
+              in: In,
+              promise: Promise[Error, Value],
+              rollbackResultIfError: Option[MapValue.Complete[Key, Error, Value]] = None
+            ): IO[Error, Value] =
               ZIO.suspendSucceed {
                 val key = keyBy(in)
                 lookup(in)
@@ -302,7 +320,28 @@ object Cache {
                     val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
                     val entryStats = EntryStats(now)
 
-                    map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+                    if (!storeOnlyIfValue)
+                      map.put(
+                        key,
+                        MapValue.Complete(new MapKey(key), Left(exit), entryStats, now.plus(timeToLive(exit)))
+                      )
+                    else {
+                      exit match {
+                        case Exit.Success(value) =>
+                          map.put(
+                            key,
+                            MapValue.Complete(new MapKey(key), Right(value), entryStats, now.plus(timeToLive(exit)))
+                          )
+                        case Exit.Failure(cause) =>
+                          rollbackResultIfError match {
+                            case None =>
+                              map.remove(key)
+                            case Some(rollbackValue) =>
+                              map.put(key, rollbackValue)
+                          }
+                      }
+                    }
+
                     promise.done(exit) *> ZIO.done(exit)
                   }
                   .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
@@ -334,7 +373,7 @@ object Cache {
 
     final case class Complete[Key, Error, Value](
       key: MapKey[Key],
-      exit: Exit[Error, Value],
+      exit: Either[Exit[Error, Value], Value],
       entryStats: EntryStats,
       timeToLive: Instant
     ) extends MapValue[Key, Error, Value]
