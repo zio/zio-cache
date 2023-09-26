@@ -151,7 +151,7 @@ object CacheSpec extends ZIOSpecDefault {
         val key  = 123
         for {
           ref   <- Ref.make(seed)
-          cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)), storeOnlyIfValue = true)
+          cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)), cacheValuesOnly = true)
           val1  <- cache.get(key)
           _     <- cache.refresh(key)
           _     <- cache.get(key)
@@ -178,7 +178,7 @@ object CacheSpec extends ZIOSpecDefault {
         val key  = 1
         for {
           ref      <- Ref.make(seed)
-          cache    <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)), storeOnlyIfValue = true)
+          cache    <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)), cacheValuesOnly = true)
           failure1 <- cache.get(key).either
           _        <- cache.refresh(key)
           val1     <- cache.get(key).either
@@ -216,7 +216,7 @@ object CacheSpec extends ZIOSpecDefault {
         val cap  = 30
         for {
           ref    <- Ref.make(seed)
-          cache  <- Cache.make(cap, Duration.Infinity, Lookup(retrieve(ref)), storeOnlyIfValue = true)
+          cache  <- Cache.make(cap, Duration.Infinity, Lookup(retrieve(ref)), cacheValuesOnly = true)
           count0 <- cache.size
           _      <- ZIO.foreachDiscard(1 to cap)(key => cache.refresh(key).either)
           count1 <- cache.size

@@ -104,9 +104,9 @@ object Cache {
     capacity: Int,
     timeToLive: Duration,
     lookup: Lookup[Key, Environment, Error, Value],
-    storeOnlyIfValue: Boolean = false
+    cacheValuesOnly: Boolean = false
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
-    makeWith(capacity, lookup, storeOnlyIfValue)(_ => timeToLive)
+    makeWith(capacity, lookup, cacheValuesOnly)(_ => timeToLive)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -116,11 +116,11 @@ object Cache {
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
     lookup: Lookup[Key, Environment, Error, Value],
-    storeOnlyIfValue: Boolean = false
+    cacheValuesOnly: Boolean = false
   )(
     timeToLive: Exit[Error, Value] => Duration
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
-    makeWithKey(capacity, lookup, storeOnlyIfValue)(timeToLive, identity)
+    makeWithKey(capacity, lookup, cacheValuesOnly)(timeToLive, identity)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -135,7 +135,7 @@ object Cache {
   def makeWithKey[In, Key, Environment, Error, Value](
     capacity: Int,
     lookup: Lookup[In, Environment, Error, Value],
-    storeOnlyIfValue: Boolean = false
+    cacheValuesOnly: Boolean = false
   )(
     timeToLive: Exit[Error, Value] => Duration,
     keyBy: In => Key
@@ -233,12 +233,7 @@ object Cache {
                         map.remove(k, value)
                         get(in)
                       } else {
-                        exit match {
-                          case Left(exit) =>
-                            ZIO.done(exit)
-                          case Right(value) =>
-                            ZIO.done(Exit.Success(value))
-                        }
+                        ZIO.done(exit)
                       }
                     case MapValue.Refreshing(
                           promiseInProgress,
@@ -249,12 +244,7 @@ object Cache {
                       if (hasExpired(ttl)) {
                         promiseInProgress.await
                       } else {
-                        currentResult match {
-                          case Left(exit) =>
-                            ZIO.done(exit)
-                          case Right(value) =>
-                            ZIO.done(Exit.Success(value))
-                        }
+                        ZIO.done(currentResult)
                       }
                   }
                 }
@@ -279,9 +269,8 @@ object Cache {
                         map.remove(k, value)
                         get(in)
                       } else {
-                        val rollbackResultIfError = if (storeOnlyIfValue) Some(completedResult) else None
                         // Only trigger the lookup if we're still the current value, `completedResult`
-                        lookupValueOf(in, promise, rollbackResultIfError).when {
+                        lookupValueOf(in, promise, Some(completedResult)).when {
                           map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
                         }
                       }
@@ -320,17 +309,17 @@ object Cache {
                     val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
                     val entryStats = EntryStats(now)
 
-                    if (!storeOnlyIfValue)
+                    if (!cacheValuesOnly)
                       map.put(
                         key,
-                        MapValue.Complete(new MapKey(key), Left(exit), entryStats, now.plus(timeToLive(exit)))
+                        MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit)))
                       )
                     else {
                       exit match {
                         case Exit.Success(value) =>
                           map.put(
                             key,
-                            MapValue.Complete(new MapKey(key), Right(value), entryStats, now.plus(timeToLive(exit)))
+                            MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit)))
                           )
                         case Exit.Failure(cause) =>
                           rollbackResultIfError match {
@@ -373,7 +362,7 @@ object Cache {
 
     final case class Complete[Key, Error, Value](
       key: MapKey[Key],
-      exit: Either[Exit[Error, Value], Value],
+      exit: Exit[Error, Value],
       entryStats: EntryStats,
       timeToLive: Instant
     ) extends MapValue[Key, Error, Value]
