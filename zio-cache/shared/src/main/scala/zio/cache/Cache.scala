@@ -18,7 +18,7 @@ package zio.cache
 
 import zio.internal.MutableConcurrentQueue
 import zio.stacktracer.TracingImplicits.disableAutoTrace
-import zio.{Exit, IO, Promise, Trace, UIO, URIO, Unsafe, ZIO}
+import zio.{Chunk, ChunkBuilder, Exit, IO, Promise, Trace, UIO, URIO, Unsafe, ZIO}
 
 import java.time.{Duration, Instant}
 import java.util.Map
@@ -66,6 +66,13 @@ abstract class Cache[-Key, +Error, +Value] {
    * cache, and returns it.
    */
   def get(key: Key)(implicit trace: Trace): IO[Error, Value]
+
+  /**
+   * Retrieves the values associated with the specified keys if they exist.
+   * Otherwise computes the values with the lookup function, puts them in the
+   * cache, and returns them.
+   */
+  def getAll(keys: Iterable[Key])(implicit trace: Trace): IO[Error, Chunk[Value]]
 
   /**
    * Computes the value associated with the specified key, with the lookup
@@ -247,6 +254,61 @@ object Cache {
                 }
               }
 
+            def getAll(ins: Iterable[In])(implicit trace: Trace): IO[Error, Chunk[Value]] =
+              ZIO.suspendSucceedUnsafe { implicit unsafe =>
+                val values = Chunk.fromIterable(ins).map { in =>
+                  val k                              = keyBy(in)
+                  var key: MapKey[Key]               = null
+                  var promise: Promise[Error, Value] = null
+                  var value                          = map.get(k)
+                  if (value eq null) {
+                    promise = newPromise()
+                    key = new MapKey(k)
+                    value = map.putIfAbsent(k, MapValue.Pending(key, promise))
+                  }
+                  if (value eq null) {
+                    trackAccess(key)
+                    trackMiss()
+                    Left(promise)
+                  } else {
+                    value match {
+                      case MapValue.Pending(key, promise) =>
+                        trackAccess(key)
+                        trackHit()
+                        Right(promise.await)
+                      case MapValue.Complete(key, exit, _, timeToLive) =>
+                        trackAccess(key)
+                        trackHit()
+                        if (hasExpired(timeToLive)) {
+                          map.remove(k, value)
+                          Right(get(in))
+                        } else {
+                          Right(exit)
+                        }
+                      case MapValue.Refreshing(
+                            promiseInProgress,
+                            MapValue.Complete(mapKey, currentResult, _, ttl)
+                          ) =>
+                        trackAccess(mapKey)
+                        trackHit()
+                        if (hasExpired(ttl)) {
+                          Right(promiseInProgress.await)
+                        } else {
+                          Right(currentResult)
+                        }
+                    }
+                  }
+                }
+                val todos = Chunk.fromIterable(ins).zip(values).collect { case (in, Left(promise)) =>
+                  (in, promise)
+                }
+                lookupValuesOf(todos) *>
+                  ZIO.foreach(values) {
+                    case Left(promise) => promise.await
+                    case Right(zio)    => zio
+                  }
+              }
+
             override def refresh(in: In): IO[Error, Unit] =
               ZIO.suspendSucceedUnsafe { implicit u =>
                 val k       = keyBy(in)
@@ -306,6 +368,53 @@ object Cache {
                     promise.done(exit) *> ZIO.done(exit)
                   }
                   .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
+              }
+
+            private def lookupValuesOf(todos: Chunk[(In, Promise[Error, Value])]): IO[Error, Any] =
+              ZIO.suspendSucceed {
+                val (ins, promises) = todos.unzip
+                val keys            = ins.map(keyBy)
+                lookup
+                  .lookupAll(ins)
+                  .provideEnvironment(environment)
+                  .exit
+                  .flatMap { exit =>
+                    val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
+                    val entryStats = EntryStats(now)
+
+                    exit match {
+                      case Exit.Success(values) =>
+                        keys.zip(values).foreach { case (key, value) =>
+                          map.put(
+                            key,
+                            MapValue.Complete(
+                              new MapKey(key),
+                              Exit.Success(value),
+                              entryStats,
+                              now.plus(timeToLive(Exit.Success(value)))
+                            )
+                          )
+
+                        }
+                        ZIO.foreach(promises.zip(values)) { case (promise, value) =>
+                          promise.done(Exit.Success(value))
+                        }
+                      case Exit.Failure(cause) =>
+                        keys.foreach { key =>
+                          map.put(
+                            key,
+                            MapValue.Complete(
+                              new MapKey(key),
+                              Exit.Failure(cause),
+                              entryStats,
+                              now.plus(timeToLive(Exit.Failure(cause)))
+                            )
+                          )
+                        }
+                        ZIO.foreach(promises)(_.done(Exit.Failure(cause)))
+                    }
+                  }
+                  .onInterrupt(ZIO.foreach(promises)(_.interrupt) *> ZIO.succeed(keys.foreach(map.remove)))
               }
 
             private def newPromise()(implicit unsafe: Unsafe) =
