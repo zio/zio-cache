@@ -225,11 +225,11 @@ object Cache {
                       promise.await
                     case MapValue.Complete(key, exit, _, timeToLive) =>
                       trackAccess(key)
-                      trackHit()
                       if (hasExpired(timeToLive)) {
                         map.remove(k, value)
                         get(in)
                       } else {
+                        trackHit()
                         ZIO.done(exit)
                       }
                     case MapValue.Refreshing(
