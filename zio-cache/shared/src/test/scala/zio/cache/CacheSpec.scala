@@ -117,13 +117,17 @@ object CacheSpec extends ZIOSpecDefault {
           _        <- cache.refresh(key)
           val1     <- cache.get(key).either
           _        <- cache.refresh(key)
-          failure2 <- cache.refresh(key).either
-          _        <- cache.refresh(key)
           val2     <- cache.get(key).either
+          failure2 <- cache.refresh(key).either
+          failure3 <- cache.get(key).either
+          _        <- cache.refresh(key)
+          val3     <- cache.get(key).either
         } yield assert(failure1)(isLeft(equalTo(error))) &&
           assert(failure2)(isLeft(equalTo(error))) &&
+          assert(failure3)(isLeft(equalTo(error))) &&
           assert(val1)(isRight(equalTo(4))) &&
-          assert(val2)(isRight(equalTo(7)))
+          assert(val2)(isRight(equalTo(5))) &&
+          assert(val3)(isRight(equalTo(7)))
       },
       test("should get the value if the key doesn't exist in the cache") {
         check(Gen.int) { salt =>
@@ -135,6 +139,91 @@ object CacheSpec extends ZIOSpecDefault {
             count1 <- cache.size
           } yield assertTrue(count0 == 0) && assertTrue(count1 == cap)
         }
+      }
+    ),
+    suite("`refresh` method when storeOnlyIfValue is true")(
+      test("should update the cache with a new value") {
+        def inc(n: Int) = n * 10
+
+        def retrieve(multiplier: Ref[Int])(key: Int) =
+          multiplier
+            .updateAndGet(inc)
+            .map(key * _)
+
+        val seed = 1
+        val key  = 123
+        for {
+          ref   <- Ref.make(seed)
+          cache <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)), cacheValuesOnly = true)
+          val1  <- cache.get(key)
+          _     <- cache.refresh(key)
+          _     <- cache.get(key)
+          val2  <- cache.get(key)
+        } yield assertTrue(val1 == inc(key)) && assertTrue(val2 == inc(val1))
+      },
+      test("should update the cache only if lookup return a value, not an error.") {
+
+        val error = new RuntimeException("Must be a multiple of 3")
+
+        def inc(n: Int) = n + 1
+
+        def retrieve(number: Ref[Int])(key: Int) =
+          number
+            .updateAndGet(inc)
+            .flatMap {
+              case n if n % 3 == 0 =>
+                ZIO.fail(error)
+              case n =>
+                ZIO.succeed(key * n)
+            }
+
+        val seed = 2
+        val key  = 1
+        for {
+          ref      <- Ref.make(seed)
+          cache    <- Cache.make(1, Duration.Infinity, Lookup(retrieve(ref)), cacheValuesOnly = true)
+          failure1 <- cache.get(key).either
+          _        <- cache.refresh(key)
+          val1     <- cache.get(key).either
+          _        <- cache.refresh(key)
+          val2     <- cache.get(key).either
+          failure2 <- cache.refresh(key).either
+          val3     <- cache.get(key).either
+          _        <- cache.refresh(key)
+          val4     <- cache.get(key).either
+        } yield assert(failure1)(isLeft(equalTo(error))) &&
+          assert(failure2)(isLeft(equalTo(error))) &&
+          assert(val1)(isRight(equalTo(4))) &&
+          assert(val2)(isRight(equalTo(5))) &&
+          assert(val3)(isRight(equalTo(5))) &&
+          assert(val4)(isRight(equalTo(7)))
+      },
+      test("should update only if it is a value when the key doesn't exist in the cache") {
+
+        val error = new RuntimeException("Must be a multiple of 3")
+
+        def inc(n: Int) = n + 1
+
+        def retrieve(number: Ref[Int])(key: Int) =
+          number
+            .updateAndGet(inc)
+            .flatMap {
+              case n if n % 3 == 0 =>
+                ZIO.fail(error)
+              case n =>
+                ZIO.succeed(key * n)
+            }
+
+        val seed = 2
+        val key  = 1
+        val cap  = 30
+        for {
+          ref    <- Ref.make(seed)
+          cache  <- Cache.make(cap, Duration.Infinity, Lookup(retrieve(ref)), cacheValuesOnly = true)
+          count0 <- cache.size
+          _      <- ZIO.foreachDiscard(1 to cap)(key => cache.refresh(key).either)
+          count1 <- cache.size
+        } yield assertTrue(count0 == 0) && assertTrue(count1 == cap / 3 * 2)
       }
     ),
     test("size") {

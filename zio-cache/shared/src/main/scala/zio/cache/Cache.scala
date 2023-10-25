@@ -103,9 +103,10 @@ object Cache {
   def make[Key, Environment, Error, Value](
     capacity: Int,
     timeToLive: Duration,
-    lookup: Lookup[Key, Environment, Error, Value]
+    lookup: Lookup[Key, Environment, Error, Value],
+    cacheValuesOnly: Boolean = false
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
-    makeWith(capacity, lookup)(_ => timeToLive)
+    makeWith(capacity, lookup, cacheValuesOnly)(_ => timeToLive)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -114,11 +115,12 @@ object Cache {
    */
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
-    lookup: Lookup[Key, Environment, Error, Value]
+    lookup: Lookup[Key, Environment, Error, Value],
+    cacheValuesOnly: Boolean = false
   )(
     timeToLive: Exit[Error, Value] => Duration
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
-    makeWithKey(capacity, lookup)(timeToLive, identity)
+    makeWithKey(capacity, lookup, cacheValuesOnly)(timeToLive, identity)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -132,7 +134,8 @@ object Cache {
    */
   def makeWithKey[In, Key, Environment, Error, Value](
     capacity: Int,
-    lookup: Lookup[In, Environment, Error, Value]
+    lookup: Lookup[In, Environment, Error, Value],
+    cacheValuesOnly: Boolean = false
   )(
     timeToLive: Exit[Error, Value] => Duration,
     keyBy: In => Key
@@ -267,7 +270,7 @@ object Cache {
                         get(in)
                       } else {
                         // Only trigger the lookup if we're still the current value, `completedResult`
-                        lookupValueOf(in, promise).when {
+                        lookupValueOf(in, promise, Some(completedResult)).when {
                           map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
                         }
                       }
@@ -292,7 +295,11 @@ object Cache {
             def size(implicit trace: Trace): UIO[Int] =
               ZIO.succeed(map.size)
 
-            private def lookupValueOf(in: In, promise: Promise[Error, Value]): IO[Error, Value] =
+            private def lookupValueOf(
+              in: In,
+              promise: Promise[Error, Value],
+              rollbackResultIfError: Option[MapValue.Complete[Key, Error, Value]] = None
+            ): IO[Error, Value] =
               ZIO.suspendSucceed {
                 val key = keyBy(in)
                 lookup(in)
@@ -302,7 +309,28 @@ object Cache {
                     val now        = Unsafe.unsafe(implicit u => clock.unsafe.instant())
                     val entryStats = EntryStats(now)
 
-                    map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+                    if (!cacheValuesOnly)
+                      map.put(
+                        key,
+                        MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit)))
+                      )
+                    else {
+                      exit match {
+                        case Exit.Success(value) =>
+                          map.put(
+                            key,
+                            MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit)))
+                          )
+                        case Exit.Failure(cause) =>
+                          rollbackResultIfError match {
+                            case None =>
+                              map.remove(key)
+                            case Some(rollbackValue) =>
+                              map.put(key, rollbackValue)
+                          }
+                      }
+                    }
+
                     promise.done(exit) *> ZIO.done(exit)
                   }
                   .onInterrupt(promise.interrupt *> ZIO.succeed(map.remove(key)))
