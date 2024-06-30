@@ -4,8 +4,6 @@ import zio.sbt.githubactions.Step
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
-crossScalaVersions := Seq.empty
-
 lazy val scalaV    = "2.13.14"
 lazy val allScalas = List("2.12", "2.13", "3.3")
 
@@ -13,6 +11,7 @@ inThisBuild(
   List(
     name             := "ZIO Cache",
     zioVersion       := "2.1.4",
+    scalaVersion     := scalaV,
     ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
       Developer(
@@ -52,7 +51,6 @@ lazy val root = project
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
-    scalaVersion := scalaV,
     stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), enableCrossProject = true),
     silencerSettings,
     enableZIO(),
@@ -93,7 +91,6 @@ lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
   .settings(stdSettings(name = Some("zio-cache-benchmarks"), packageName = Some("zio.cache")))
   .settings(
-    scalaVersion   := scalaV,
     publish / skip := true,
     enableZIO()
   )
@@ -103,14 +100,14 @@ lazy val benchmarks = project
 lazy val docs = project
   .in(file("zio-cache-docs"))
   .settings(
-    scalaVersion := scalaV,
-    moduleName   := "zio-cache-docs",
+    moduleName := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
     projectName                                := (ThisBuild / name).value,
     mainModuleName                             := (zioCacheJVM / moduleName).value,
     projectStage                               := ProjectStage.Development,
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
+    crossScalaVersions                         := Seq(scalaV),
     publish / skip                             := true
   )
   .dependsOn(zioCacheJVM)
@@ -142,5 +139,7 @@ lazy val enableMimaSettingsNative =
 ThisBuild / ciCheckArtifactsBuildSteps +=
   Step.SingleStep(
     "Check binary compatibility",
-    run = Some("sbt \"+zioCacheJVM/mimaReportBinaryIssues; +zioCacheJS/mimaReportBinaryIssues; +zioCacheNative/mimaReportBinaryIssues\"")
+    run = Some(
+      "sbt \"+zioCacheJVM/mimaReportBinaryIssues; +zioCacheJS/mimaReportBinaryIssues; +zioCacheNative/mimaReportBinaryIssues\""
+    )
   )
