@@ -144,6 +144,6 @@ ThisBuild / ciCheckArtifactsBuildSteps +=
   Step.SingleStep(
     "Check binary compatibility",
     run = Some(
-      "sbt \"+zioCacheJVM/mimaReportBinaryIssues; +zioCacheJS/mimaReportBinaryIssues; +zioCacheNative/mimaReportBinaryIssues\""
+      "sbt \"+zioCacheJVM/mimaReportBinaryIssues; zioCacheJS/mimaReportBinaryIssues; zioCacheNative/mimaReportBinaryIssues\""
     )
   )
