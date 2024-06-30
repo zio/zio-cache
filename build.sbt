@@ -1,7 +1,13 @@
 import Versions.*
 import BuildHelper.*
+import zio.sbt.githubactions.Step
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
+
+crossScalaVersions := Seq.empty
+
+lazy val scalaV    = "2.13.14"
+lazy val allScalas = List("2.12", "2.13", "3.3")
 
 inThisBuild(
   List(
@@ -16,13 +22,13 @@ inThisBuild(
         url("http://degoes.net")
       )
     ),
-    ciEnabledBranches := Seq("series/2.x"),
-    ciTargetScalaVersions :=
-      Map(
-        (zioCacheJVM / thisProject).value.id    -> (zioCacheJVM / crossScalaVersions).value,
-        (zioCacheJS / thisProject).value.id     -> (zioCacheJS / crossScalaVersions).value,
-        (zioCacheNative / thisProject).value.id -> (zioCacheNative / crossScalaVersions).value
-      ),
+    ciEnabledBranches    := Seq("series/2.x"),
+    ciTargetJavaVersions := List("11", "21"),
+    ciTargetScalaVersions := Map(
+      (zioCacheJVM / thisProject).value.id    -> allScalas,
+      (zioCacheJS / thisProject).value.id     -> allScalas,
+      (zioCacheNative / thisProject).value.id -> allScalas
+    ),
     versionScheme := Some("early-semver")
   )
 )
@@ -46,32 +52,50 @@ lazy val root = project
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
+    scalaVersion := scalaV,
     stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), enableCrossProject = true),
     silencerSettings,
     enableZIO(),
     libraryDependencies ++= Seq(
       "org.scala-lang.modules" %% "scala-collection-compat" % ScalaCollectionCompatVersion
-    )
+    ),
+    scalacOptions ++=
+      (if (scalaBinaryVersion.value == "3")
+         Seq()
+       else
+         Seq(
+           "-opt:l:method",
+           "-opt:l:inline",
+           "-opt-inline-from:scala.**"
+         ))
   )
-
-lazy val zioCacheJS = zioCache.js
-  .settings(scalaJSUseMainModuleInitializer := true)
 
 lazy val zioCacheJVM = zioCache.jvm
   .settings(
-    crossScalaVersions += scala3.value,
     scala3Settings,
-    scalaReflectTestSettings
+    scalaReflectTestSettings,
+    enableMimaSettingsJVM
+  )
+
+lazy val zioCacheJS = zioCache.js
+  .settings(
+    scalaJSUseMainModuleInitializer := true,
+    enableMimaSettingsJS
   )
 
 lazy val zioCacheNative = zioCache.native
-  .settings(nativeSettings)
+  .settings(
+    nativeSettings,
+    enableMimaSettingsNative
+  )
 
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
   .settings(stdSettings(name = Some("zio-cache-benchmarks"), packageName = Some("zio.cache")))
   .settings(
-    publish / skip := true
+    scalaVersion   := scalaV,
+    publish / skip := true,
+    enableZIO()
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(JmhPlugin)
@@ -79,7 +103,8 @@ lazy val benchmarks = project
 lazy val docs = project
   .in(file("zio-cache-docs"))
   .settings(
-    moduleName := "zio-cache-docs",
+    scalaVersion := scalaV,
+    moduleName   := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
     projectName                                := (ThisBuild / name).value,
@@ -90,3 +115,32 @@ lazy val docs = project
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(WebsitePlugin)
+
+lazy val enforceMimaCompatibility = true // Enable / disable failing CI on binary incompatibilities
+
+lazy val enableMimaSettingsJVM =
+  Def.settings(
+    mimaFailOnProblem     := enforceMimaCompatibility,
+    mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %% moduleName.value % _).toSet,
+    mimaBinaryIssueFilters ++= Seq()
+  )
+
+lazy val enableMimaSettingsJS =
+  Def.settings(
+    mimaFailOnProblem     := enforceMimaCompatibility,
+    mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %%% moduleName.value % _).toSet,
+    mimaBinaryIssueFilters ++= Seq()
+  )
+
+lazy val enableMimaSettingsNative =
+  Def.settings(
+    mimaFailOnProblem     := enforceMimaCompatibility,
+    mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %%% moduleName.value % _).toSet,
+    mimaBinaryIssueFilters ++= Seq()
+  )
+
+ThisBuild / ciCheckArtifactsBuildSteps +=
+  Step.SingleStep(
+    "Check binary compatibility",
+    run = Some("sbt \"+zioCacheJVM/mimaReportBinaryIssues; +zioCacheJS/mimaReportBinaryIssues; +zioCacheNative/mimaReportBinaryIssues\"")
+  )
