@@ -4,14 +4,16 @@ import zio.sbt.githubactions.Step
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
-lazy val scalaV    = "2.13.14"
+lazy val scala212V = "2.12.19"
+lazy val scala213V = "2.13.14"
+lazy val scala3V   = "3.3.3"
 lazy val allScalas = List("2.12", "2.13", "3.3")
 
 inThisBuild(
   List(
     name             := "ZIO Cache",
     zioVersion       := "2.1.4",
-    scalaVersion     := scalaV,
+    scalaVersion     := scala213V,
     ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
       Developer(
@@ -37,7 +39,8 @@ addCommandAlias("benchmark", "benchmarks/Jmh/run")
 lazy val root = project
   .in(file("."))
   .settings(
-    publish / skip := true,
+    publish / skip     := true,
+    crossScalaVersions := Seq(),
     unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
   )
   .aggregate(
@@ -51,6 +54,7 @@ lazy val root = project
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
+    crossScalaVersions := List(scala212V, scala213V, scala3V),
     stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), enableCrossProject = true),
     silencerSettings,
     enableZIO(),
@@ -91,8 +95,8 @@ lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
   .settings(stdSettings(name = Some("zio-cache-benchmarks"), packageName = Some("zio.cache")))
   .settings(
-    publish / skip := true,
-    enableZIO()
+    crossScalaVersions := List(scala213V, scala3V),
+    publish / skip     := true
   )
   .dependsOn(zioCacheJVM)
   .enablePlugins(JmhPlugin)
@@ -107,7 +111,7 @@ lazy val docs = project
     mainModuleName                             := (zioCacheJVM / moduleName).value,
     projectStage                               := ProjectStage.Development,
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
-    crossScalaVersions                         := Seq(scalaV),
+    crossScalaVersions                         := List(scala213V),
     publish / skip                             := true
   )
   .dependsOn(zioCacheJVM)
