@@ -1,13 +1,12 @@
-import Versions._
-import BuildHelper._
+import Versions.*
+import BuildHelper.*
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
 inThisBuild(
   List(
-    name := "ZIO Cache",
-    crossScalaVersions -= scala3.value,
-    sbtBuildOptions  := List("-J-XX:+UseG1GC", "-J-Xmx4g", "-J-Xms2g", "-J-Xss16m"),
+    name             := "ZIO Cache",
+    zioVersion       := "2.1.4",
     ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
       Developer(
@@ -18,12 +17,13 @@ inThisBuild(
       )
     ),
     ciEnabledBranches := Seq("series/2.x"),
-    supportedScalaVersions :=
+    ciTargetScalaVersions :=
       Map(
         (zioCacheJVM / thisProject).value.id    -> (zioCacheJVM / crossScalaVersions).value,
         (zioCacheJS / thisProject).value.id     -> (zioCacheJS / crossScalaVersions).value,
         (zioCacheNative / thisProject).value.id -> (zioCacheNative / crossScalaVersions).value
-      )
+      ),
+    versionScheme := Some("early-semver")
   )
 )
 
@@ -46,7 +46,7 @@ lazy val root = project
 lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
-    stdSettings(name = "zio-cache", packageName = Some("zio.cache"), enableCrossProject = true),
+    stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), enableCrossProject = true),
     silencerSettings,
     enableZIO(),
     libraryDependencies ++= Seq(
@@ -55,7 +55,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   )
 
 lazy val zioCacheJS = zioCache.js
-  .settings(crossScalaVersions -= scala211.value, scalaJSUseMainModuleInitializer := true)
+  .settings(scalaJSUseMainModuleInitializer := true)
 
 lazy val zioCacheJVM = zioCache.jvm
   .settings(
@@ -65,14 +65,11 @@ lazy val zioCacheJVM = zioCache.jvm
   )
 
 lazy val zioCacheNative = zioCache.native
-  .settings(
-    nativeSettings,
-    crossScalaVersions -= scala211.value
-  )
+  .settings(nativeSettings)
 
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
-  .settings(stdSettings(name = "zio-cache-benchmarks", packageName = Some("zio.cache")))
+  .settings(stdSettings(name = Some("zio-cache-benchmarks"), packageName = Some("zio.cache")))
   .settings(
     publish / skip := true
   )
@@ -85,7 +82,6 @@ lazy val docs = project
     moduleName := "zio-cache-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
-    crossScalaVersions -= scala211.value,
     projectName                                := (ThisBuild / name).value,
     mainModuleName                             := (zioCacheJVM / moduleName).value,
     projectStage                               := ProjectStage.Development,

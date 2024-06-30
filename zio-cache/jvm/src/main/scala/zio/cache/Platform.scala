@@ -16,12 +16,11 @@
 
 package zio.cache
 
-import com.github.ghik.silencer.silent
-
 import java.util.Map
 import java.util.concurrent.ConcurrentHashMap
+import scala.annotation.nowarn
 
-@silent("never used")
+@nowarn("msg=never used")
 private object Platform {
 
   /**
