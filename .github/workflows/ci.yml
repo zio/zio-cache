@@ -79,7 +79,11 @@ jobs:
         java:
         - '11'
         - '21'
-        scala-project:
+        scala-project-java11:
+        - ++2.12 zioCacheJVM
+        - ++2.13 zioCacheJVM
+        - ++3.3 zioCacheJVM
+        scala-project-java21:
         - ++2.12 zioCacheJVM
         - ++2.13 zioCacheJVM
         - ++3.3 zioCacheJVM
@@ -104,8 +108,15 @@ jobs:
       uses: actions/checkout@v4
       with:
         fetch-depth: '0'
-    - name: Test
-      run: free --si -tmws 10 & sbt ${{ matrix.scala-project }}/test
+    - name: Java 11 Tests
+      if: ${{ matrix.java == '11' }}
+      run: free --si -tmws 10 & sbt ${{ matrix.scala-project-java11 }}/test
+    - name: Java 17 Tests
+      if: ${{ matrix.java == '17' }}
+      run: free --si -tmws 10 & sbt ${{ matrix.scala-project-java17 }}/test
+    - name: Java 21 Tests
+      if: ${{ matrix.java == '21' }}
+      run: free --si -tmws 10 & sbt ${{ matrix.scala-project-java21 }}/test
   update-readme:
     name: Update README
     runs-on: ubuntu-latest

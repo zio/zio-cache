@@ -23,7 +23,11 @@ inThisBuild(
         url("http://degoes.net")
       )
     ),
-    ciEnabledBranches    := Seq("series/2.x"),
+    ciEnabledBranches := Seq("series/2.x"),
+    ciTargetMinJavaVersions := Map(
+      (zioCacheJS / thisProject).value.id     -> "21",
+      (zioCacheNative / thisProject).value.id -> "21"
+    ),
     ciTargetJavaVersions := List("11", "21"),
     ciTargetScalaVersions := Map(
       (zioCacheJVM / thisProject).value.id    -> allScalas,
@@ -60,6 +64,10 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
     enableZIO(),
     libraryDependencies ++= Seq(
       "org.scala-lang.modules" %% "scala-collection-compat" % ScalaCollectionCompatVersion
+    ),
+    scalacOptions ++= Seq(
+      "-release",
+      "11"
     ),
     scalacOptions ++=
       (if (scalaBinaryVersion.value == "3")
