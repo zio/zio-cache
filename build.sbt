@@ -4,15 +4,15 @@ import zio.sbt.githubactions.Step
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
-lazy val scala212V = "2.12.19"
-lazy val scala213V = "2.13.14"
-lazy val scala3V   = "3.3.3"
+lazy val scala212V = "2.12.20"
+lazy val scala213V = "2.13.16"
+lazy val scala3V   = "3.3.5"
 lazy val allScalas = List("2.12", "2.13", "3.3")
 
 inThisBuild(
   List(
     name             := "ZIO Cache",
-    zioVersion       := "2.1.4",
+    zioVersion       := "2.1.14",
     scalaVersion     := scala213V,
     ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
@@ -23,7 +23,7 @@ inThisBuild(
         url("http://degoes.net")
       )
     ),
-    ciEnabledBranches := Seq("series/2.x"),
+    ciEnabledBranches    := Seq("series/2.x"),
     ciTargetJavaVersions := List("11", "21"),
     ciTargetScalaVersions := Map(
       (zioCacheJVM / thisProject).value.id    -> allScalas,
