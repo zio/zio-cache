@@ -147,7 +147,9 @@ lazy val enableMimaSettingsNative =
 ThisBuild / ciCheckArtifactsBuildSteps +=
   Step.SingleStep(
     "Check binary compatibility",
+    // TODO: Re-enable for Native once we publish for Scala Native 0.5.x
     run = Some(
-      "sbt \"+zioCacheJVM/mimaReportBinaryIssues; zioCacheJS/mimaReportBinaryIssues; zioCacheNative/mimaReportBinaryIssues\""
+      // "sbt \"+zioCacheJVM/mimaReportBinaryIssues; zioCacheJS/mimaReportBinaryIssues; zioCacheNative/mimaReportBinaryIssues\""
+      "sbt \"+zioCacheJVM/mimaReportBinaryIssues; zioCacheJS/mimaReportBinaryIssues"
     )
   )
