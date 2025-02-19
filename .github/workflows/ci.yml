@@ -45,7 +45,7 @@ jobs:
     - name: Check artifacts build process
       run: sbt +publishLocal
     - name: Check binary compatibility
-      run: sbt "+zioCacheJVM/mimaReportBinaryIssues; zioCacheJS/mimaReportBinaryIssues
+      run: sbt "+zioCacheJVM/mimaReportBinaryIssues; zioCacheJS/mimaReportBinaryIssues"
     - name: Check website build process
       run: free --si -tmws 10 & sbt docs/clean; sbt docs/buildWebsite
   lint:
