@@ -146,6 +146,15 @@ object CacheSpec extends ZIOSpecDefault {
         } yield assertTrue(size == 10)
       }
     },
+    test("ensure get is not hanging when we interrupt right after a get in another fiber") {
+      val n = 100000
+      for {
+        cache <- Cache.make(10, Duration.Infinity, Lookup((_: Unit) => ZIO.unit))
+        task1  = (cache.invalidate(()) *> cache.get(())).fork.flatMap(_.interrupt)
+        _     <- ZIO.collectAll(List.fill(n)(task1))
+        _     <- (cache.get(()).exit.timeoutFail("hanging")(3.seconds)).replicateZIODiscard(n)
+      } yield assertCompletes
+    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds),
     test("cache hits should not be incremented for expired entries") {
       for {
         cache      <- Cache.make(100, 1.second, Lookup(identity))
