@@ -1,5 +1,6 @@
 import Versions.*
 import BuildHelper.*
+import com.typesafe.tools.mima.core.*
 import zio.sbt.githubactions.Step
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
@@ -123,25 +124,33 @@ lazy val docs = project
 
 lazy val enforceMimaCompatibility = true // Enable / disable failing CI on binary incompatibilities
 
+lazy val mimaFilters = Seq(
+  ProblemFilters.exclude[Problem]("zio.cache.ScopedCacheImplementation#CacheState.map"),
+  ProblemFilters.exclude[MissingClassProblem]("zio.cache.Platform*"),
+  ProblemFilters.exclude[Problem]("zio.cache.Cache#CacheState*"),
+  ProblemFilters.exclude[Problem]("zio.cache.ScopedCache#CacheState*"),
+  ProblemFilters.exclude[Problem]("zio.cache.ScopedCacheImplementation#CacheState*")
+)
+
 lazy val enableMimaSettingsJVM =
   Def.settings(
     mimaFailOnProblem     := enforceMimaCompatibility,
     mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %% moduleName.value % _).toSet,
-    mimaBinaryIssueFilters ++= Seq()
+    mimaBinaryIssueFilters ++= mimaFilters
   )
 
 lazy val enableMimaSettingsJS =
   Def.settings(
     mimaFailOnProblem     := enforceMimaCompatibility,
     mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %%% moduleName.value % _).toSet,
-    mimaBinaryIssueFilters ++= Seq()
+    mimaBinaryIssueFilters ++= mimaFilters
   )
 
 lazy val enableMimaSettingsNative =
   Def.settings(
     mimaFailOnProblem     := enforceMimaCompatibility,
     mimaPreviousArtifacts := previousStableVersion.value.map(organization.value %%% moduleName.value % _).toSet,
-    mimaBinaryIssueFilters ++= Seq()
+    mimaBinaryIssueFilters ++= mimaFilters
   )
 
 ThisBuild / ciCheckArtifactsBuildSteps +=

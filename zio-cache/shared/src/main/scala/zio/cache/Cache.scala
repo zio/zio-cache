@@ -21,7 +21,7 @@ import zio.internal.MutableConcurrentQueue
 import zio.stacktracer.TracingImplicits.disableAutoTrace
 
 import java.time.{Duration, Instant}
-import java.util.Map
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
 import scala.annotation.tailrec
 
@@ -352,7 +352,7 @@ object Cache {
    * The `CacheState` represents the mutable state underlying the cache.
    */
   private final case class CacheState[Key, Error, Value](
-    map: Map[Key, MapValue[Key, Error, Value]],
+    map: ConcurrentHashMap[Key, MapValue[Key, Error, Value]],
     keys: KeySet[Key],
     accesses: MutableConcurrentQueue[MapKey[Key]],
     hits: LongAdder,
@@ -367,7 +367,7 @@ object Cache {
      */
     def initial[Key, Error, Value](): CacheState[Key, Error, Value] =
       CacheState(
-        Platform.newConcurrentMap,
+        new ConcurrentHashMap(),
         new KeySet,
         MutableConcurrentQueue.unbounded,
         new LongAdder,
