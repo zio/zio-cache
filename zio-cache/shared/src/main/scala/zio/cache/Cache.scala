@@ -16,9 +16,9 @@
 
 package zio.cache
 
+import zio._
 import zio.internal.MutableConcurrentQueue
 import zio.stacktracer.TracingImplicits.disableAutoTrace
-import zio._
 
 import java.time.{Duration, Instant}
 import java.util.Map
