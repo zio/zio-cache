@@ -286,32 +286,39 @@ object Cache {
       clock.unsafe.instant()(Unsafe).isAfter(timeToLive)
 
     private def trackAccess(key: MapKey[Key]): Unit = {
-      accesses.offer(key)
-      if (updating.compareAndSet(false, true)) {
-        var loop = true
-        while (loop) {
-          val key = accesses.poll(null)
-          if (key ne null) {
-            keys.add(key)
-          } else {
-            loop = false
-          }
-        }
-        var size = map.size
-        loop = size > capacity
-        while (loop) {
-          val key = keys.remove()
-          if (key ne null) {
-            if (map.remove(key.value) ne null) {
-              size -= 1
-              loop = size > capacity
+      @tailrec def loop(): Unit = {
+        if (updating.compareAndSet(false, true)) {
+          var loop = true
+          while (loop) {
+            val key = accesses.poll(null)
+            if (key ne null) {
+              keys.add(key)
+            } else {
+              loop = false
             }
-          } else {
-            loop = false
           }
+          var size = map.size
+          loop = size > capacity
+          while (loop) {
+            val key = keys.remove()
+            if (key ne null) {
+              if (map.remove(key.value) ne null) {
+                size -= 1
+                loop = size > capacity
+              }
+            } else {
+              loop = false
+            }
+          }
+          updating.set(false)
         }
-        updating.set(false)
+
+        // Someone might have added a key right after we drained the queue but before setting updating to `false`
+        if (!accesses.isEmpty()) loop() else ()
       }
+
+      accesses.offer(key)
+      loop()
     }
 
     private def trackHit(): Unit =
