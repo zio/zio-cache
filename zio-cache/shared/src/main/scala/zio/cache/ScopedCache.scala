@@ -21,6 +21,7 @@ import zio.internal.MutableConcurrentQueue
 
 import java.time.{Duration, Instant}
 import java.util
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
 
@@ -179,7 +180,7 @@ object ScopedCache {
    * The `CacheState` represents the mutable state underlying the cache.
    */
   private final case class CacheState[Key, Error, Value](
-    map: util.Map[Key, MapValue[Key, Error, Value]],
+    map: ConcurrentHashMap[Key, MapValue[Key, Error, Value]],
     keys: KeySet[Key],
     accesses: MutableConcurrentQueue[MapKey[Key]],
     hits: LongAdder,
@@ -194,7 +195,7 @@ object ScopedCache {
      */
     def initial[Key, Error, Value](): CacheState[Key, Error, Value] =
       CacheState(
-        Platform.newConcurrentMap,
+        new ConcurrentHashMap(),
         new KeySet,
         MutableConcurrentQueue.unbounded,
         new LongAdder,
