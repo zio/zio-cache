@@ -906,7 +906,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         _     <- ZIO.collectAll(List.fill(n)(task1))
         _     <- (cache.get(()).exit.timeoutFail("hanging")(3.seconds)).replicateZIODiscard(n)
       } yield assertCompletes
-    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds)
+    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds) @@ TestAspect.exceptJS
   )
 
   type Releaser = (=> Exit[Any, Any]) => UIO[Unit]
