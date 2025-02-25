@@ -120,12 +120,10 @@ object ScopedCache {
   )(
     timeToLive: Exit[Error, Value] => Duration
   ): URIO[Environment, ScopedCacheImplementation[Key, Environment, Error, Value]] =
-    ZIO.clock.flatMap { clock =>
-      ZIO
-        .environment[Environment]
-        .map { environment =>
-          new ScopedCacheImplementation(capacity, scopedLookup, timeToLive, clock, environment)
-        }
+    ZIO.clockWith { clock =>
+      ZIO.environmentWith[Environment] { environment =>
+        new ScopedCacheImplementation(capacity, scopedLookup, timeToLive, clock, environment)
+      }
     }
 
   /**
@@ -151,7 +149,7 @@ object ScopedCache {
     ) extends MapValue[Key, Error, Value] {
       def toScoped: ZIO[Scope, Error, Value] =
         exit.foldExit(
-          cause => ZIO.done(Exit.Failure(cause)),
+          cause => Exit.failCause(cause),
           { case (value, _) =>
             ZIO.acquireRelease(ZIO.succeed(ownerCount.incrementAndGet()).as(value)) { _ =>
               releaseOwner
