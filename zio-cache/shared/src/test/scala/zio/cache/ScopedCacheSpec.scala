@@ -897,7 +897,16 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           } yield allCleaned && assert(releasers)(isEmpty)
         }
       }
-    )
+    ),
+    test("ensure get is not hanging when we interrupt right after a get in another fiber") {
+      val n = 100000
+      for {
+        cache <- ScopedCache.make(10, Duration.Infinity, ScopedLookup((_: Unit) => ZIO.unit))
+        task1  = (cache.invalidate(()) *> cache.get(())).fork.flatMap(_.interrupt)
+        _     <- ZIO.collectAll(List.fill(n)(task1))
+        _     <- (cache.get(()).exit.timeoutFail("hanging")(3.seconds)).replicateZIODiscard(n)
+      } yield assertCompletes
+    } @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds) @@ TestAspect.exceptJS
   )
 
   type Releaser = (=> Exit[Any, Any]) => UIO[Unit]
