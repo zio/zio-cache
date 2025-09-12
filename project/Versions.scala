@@ -1,3 +1,3 @@
 object Versions {
-  val ScalaCollectionCompatVersion = "2.12.0"
+  val ScalaCollectionCompatVersion = "2.13.0"
 }
