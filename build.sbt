@@ -15,7 +15,6 @@ inThisBuild(
     name             := "ZIO Cache",
     zioVersion       := "2.1.21",
     scalaVersion     := scala213V,
-    javacOptions     ++= Seq("-source", "17", "-target", "17"),
     ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
       Developer(
