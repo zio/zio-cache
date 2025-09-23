@@ -28,23 +28,27 @@ class ChurnBenchmark {
     val strings = (0 until size).map(_.toString).toArray
 
     Unsafe.unsafe { implicit u =>
-      cache = runtime.unsafe.run(
-        for {
-          cache <- Cache.make(size, Duration.Infinity, identityLookup)
-          _     <- ZIO.foreachDiscard(strings)(cache.get(_))
-        } yield cache
-      ).getOrThrowFiberFailure()
+      cache = runtime.unsafe
+        .run(
+          for {
+            cache <- Cache.make(size, Duration.Infinity, identityLookup)
+            _     <- ZIO.foreachDiscard(strings)(cache.get(_))
+          } yield cache
+        )
+        .getOrThrowFiberFailure()
     }
   }
 
   @Benchmark
   def zioCacheChurn(): Unit =
     Unsafe.unsafe { implicit u =>
-      runtime.unsafe.run(
-        for {
-          _ <- ZIO.foreachDiscard(newEntries)(cache.get(_))
-        } yield ()
-      ).getOrThrowFiberFailure()
+      runtime.unsafe
+        .run(
+          for {
+            _ <- ZIO.foreachDiscard(newEntries)(cache.get(_))
+          } yield ()
+        )
+        .getOrThrowFiberFailure()
     }
 
 }

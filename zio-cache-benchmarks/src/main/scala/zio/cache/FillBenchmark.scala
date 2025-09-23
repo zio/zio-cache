@@ -28,11 +28,13 @@ class FillBenchmark {
   @Benchmark
   def zioCacheFill(): Unit =
     Unsafe.unsafe { implicit u =>
-      runtime.unsafe.run(
-        for {
-          cache <- Cache.make(size, Duration.Infinity, identityLookup)
-          _     <- ZIO.foreachDiscard(strings)(cache.get(_))
-        } yield ()
-      ).getOrThrowFiberFailure()
+      runtime.unsafe
+        .run(
+          for {
+            cache <- Cache.make(size, Duration.Infinity, identityLookup)
+            _     <- ZIO.foreachDiscard(strings)(cache.get(_))
+          } yield ()
+        )
+        .getOrThrowFiberFailure()
     }
 }
