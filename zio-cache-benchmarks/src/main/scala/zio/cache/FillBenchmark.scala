@@ -11,10 +11,8 @@ import java.util.concurrent.TimeUnit
 @Measurement(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Warmup(iterations = 5, timeUnit = TimeUnit.SECONDS, time = 3)
 @Fork(1)
-class FillBenchmark extends zio.Runtime[Any] {
-  override val environment: ZEnvironment[Any] = ZEnvironment.empty
-  override val fiberRefs: FiberRefs           = FiberRefs.empty
-  override val runtimeFlags: RuntimeFlags     = RuntimeFlags.default
+class FillBenchmark {
+  val runtime = Runtime.default
 
   @Param(Array("10000"))
   var size: Int = _
@@ -30,7 +28,7 @@ class FillBenchmark extends zio.Runtime[Any] {
   @Benchmark
   def zioCacheFill(): Unit =
     Unsafe.unsafe { implicit u =>
-      unsafe
+      runtime.unsafe
         .run(
           for {
             cache <- Cache.make(size, Duration.Infinity, identityLookup)
