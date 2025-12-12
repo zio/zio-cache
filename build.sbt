@@ -5,7 +5,7 @@ import zio.sbt.githubactions.Step
 
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
-lazy val scala212V = "2.12.20"
+lazy val scala212V = "2.12.21"
 lazy val scala213V = "2.13.18"
 lazy val scala3V   = "3.3.7"
 lazy val allScalas = List("2.12", "2.13", "3.3")
