@@ -1,4 +1,4 @@
-val zioSbtVersion      = "0.4.7"
+val zioSbtVersion      = "0.4.8"
 val scalaNativeVersion = "0.5.9"
 
 addSbtPlugin(("dev.zio" % "zio-sbt-ecosystem" % zioSbtVersion).exclude("org.scala-native", "sbt-scala-native"))
