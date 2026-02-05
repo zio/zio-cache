@@ -1032,7 +1032,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
     y => (x ^ y).hashCode
 
   object PropertyBaseTestingUtil {
-    type Key              = Char
+    type Key              = String
     type ResourceIdForKey = Int
     sealed trait ResourceOperation
     case class ResourceId(key: Key, resourceIdForKey: ResourceIdForKey)
@@ -1096,7 +1096,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
     }
 
     val balancedSequenceOfAcquireReleaseAndRefresh: Gen[Sized, List[ResourceOperation]] = {
-      val someKey                   = Gen.alphaChar
+      val someKey                   = Gen.alphaNumericString
       val numResourcesCreatedPerKey = Gen.int(1, 10)
       Gen.mapOf(someKey, numResourcesCreatedPerKey).flatMap { numPairByKey =>
         sequenceOfAcquireReleaseAndRefreshRec(
@@ -1110,7 +1110,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
     }
 
     val sequenceOfAcquireReleaseAndRefreshLettingSomeResourceUsed: Gen[Sized, ResourceOperationsAndResult] = {
-      val someKey                   = Gen.alphaChar
+      val someKey                   = Gen.alphaNumericString
       val numResourcesCreatedPerKey = Gen.int(1, 10)
       Gen.mapOf(someKey, numResourcesCreatedPerKey).flatMap { numPairByKey =>
         sequenceOfAcquireReleaseAndRefreshRec(
