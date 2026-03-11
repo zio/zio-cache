@@ -166,6 +166,16 @@ object CacheSpec extends ZIOSpecDefault {
         misses      = cacheStats.misses
       } yield assertTrue(hits == 0L) &&
         assertTrue(misses == 2L)
+    },
+    test("contains should return false for expired entries") {
+      for {
+        cache     <- Cache.make(100, 1.second, Lookup(identity))
+        _         <- cache.get(42)
+        contains1 <- cache.contains(42)
+        _         <- TestClock.adjust(2.seconds)
+        contains2 <- cache.contains(42)
+      } yield assertTrue(contains1) &&
+        assertTrue(!contains2)
     }
   )
 }
