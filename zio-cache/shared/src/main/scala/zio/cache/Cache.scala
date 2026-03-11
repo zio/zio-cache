@@ -164,7 +164,13 @@ object Cache {
       ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
     override def contains(in: In)(implicit trace: Trace): UIO[Boolean] =
-      ZIO.succeed(map.containsKey(keyBy(in)))
+      ZIO.succeed {
+        map.get(keyBy(in)) match {
+          case null                                                           => false
+          case _: MapValue.Pending[?, ?, ?] | _: MapValue.Refreshing[?, ?, ?] => true
+          case MapValue.Complete(_, _, _, timeToLive)                         => !hasExpired(timeToLive)
+        }
+      }
 
     override def entryStats(in: In)(implicit trace: Trace): UIO[Option[EntryStats]] =
       ZIO.succeed {
