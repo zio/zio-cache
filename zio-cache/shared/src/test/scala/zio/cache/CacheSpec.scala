@@ -182,7 +182,7 @@ object CacheSpec extends ZIOSpecDefault {
           promise  <- Promise.make[Nothing, Int]
           cache    <- Cache.make(100, Duration.Infinity, Lookup((_: Int) => promise.await))
           _        <- cache.get(42).fork
-          _        <- ZIO.sleep(100.millis)
+          _        <- ZIO.sleep(5.millis)
           contains <- cache.contains(42)
           _        <- promise.succeed(42)
         } yield assertTrue(contains)
