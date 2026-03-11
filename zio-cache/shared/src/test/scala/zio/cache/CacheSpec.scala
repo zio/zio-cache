@@ -175,15 +175,14 @@ object CacheSpec extends ZIOSpecDefault {
           contains1 <- cache.contains(42)
           _         <- TestClock.adjust(2.seconds)
           contains2 <- cache.contains(42)
-        } yield assertTrue(contains1) &&
-          assertTrue(!contains2)
+        } yield assertTrue(contains1) && assertTrue(!contains2)
       },
       test("should return true during ongoing lookup") {
         for {
-          promise <- Promise.make[Nothing, Int]
-          cache   <- Cache.make(100, Duration.Infinity, Lookup((_: Int) => promise.await))
-          _       <- cache.get(42).fork
-          _       <- ZIO.sleep(100.millis)
+          promise  <- Promise.make[Nothing, Int]
+          cache    <- Cache.make(100, Duration.Infinity, Lookup((_: Int) => promise.await))
+          _        <- cache.get(42).fork
+          _        <- ZIO.sleep(100.millis)
           contains <- cache.contains(42)
           _        <- promise.succeed(42)
         } yield assertTrue(contains)
