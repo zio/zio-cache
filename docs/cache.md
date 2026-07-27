@@ -78,3 +78,45 @@ Similarly, the `contains` operator returns whether a value associated with the s
 There are also the `cacheStats` and `entryStats` operators which allow obtaining a snapshot of statistics either for the cache itself or for a specified entry. See the sections on cache statistics and entry statistics for further discussion of this functionality.
 
 The `invalidate` and `invalidateAll` operators can be used to evict a value associated with a specified key and evict all values, respectively.
+
+```scala mdoc:reset:invisible
+```
+
+## Cache Events
+
+A `CacheListener` can be used to observe significant events in the lifecycle of a cache, for example to export cache activity to a metrics backend:
+
+```scala mdoc:compile-only
+import zio._
+
+sealed trait EvictionCause // Capacity, Expired, or Invalidated
+
+trait CacheListener[-Key, -Error, -Value] {
+  def onHit(key: Key)(implicit unsafe: Unsafe): Unit
+  def onMiss(key: Key)(implicit unsafe: Unsafe): Unit
+  def onLoad(key: Key, exit: Exit[Error, Value], loadTime: java.time.Duration)(implicit unsafe: Unsafe): Unit
+  def onEviction(key: Key, cause: EvictionCause)(implicit unsafe: Unsafe): Unit
+}
+```
+
+All methods have no-op default implementations, so a listener only needs to override the events it is interested in. Listeners are invoked synchronously on the hot path of the cache, so they must be fast, non-blocking, and must not throw exceptions.
+
+A listener is attached when the cache is constructed, using the overloads of `make`, `makeWith`, and `makeWithKey` that accept a `CacheListener`. The library also ships with a ready-made listener that reports cache events with ZIO metrics:
+
+```scala mdoc:compile-only
+import zio._
+import zio.cache._
+
+def timeConsumingEffect(key: String): UIO[Int] =
+  ZIO.sleep(5.seconds).as(key.hashCode)
+
+val cache: UIO[Cache[String, Nothing, Int]] =
+  Cache.make(
+    capacity = 100,
+    timeToLive = Duration.Infinity,
+    lookup = Lookup(timeConsumingEffect),
+    listener = CacheListener.metrics("user-cache")
+  )
+```
+
+The metrics listener reports `zio_cache_hits`, `zio_cache_misses`, `zio_cache_load_successes`, `zio_cache_load_failures`, `zio_cache_load_duration`, and `zio_cache_evictions`, all tagged with the specified cache name.
