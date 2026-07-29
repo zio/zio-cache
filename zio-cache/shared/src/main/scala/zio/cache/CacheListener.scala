@@ -17,7 +17,7 @@
 package zio.cache
 
 import zio.metrics.Metric
-import zio.{Exit, Unsafe}
+import zio.{Exit, UIO}
 
 import java.time.Duration
 import java.time.temporal.ChronoUnit
@@ -28,12 +28,10 @@ import java.time.temporal.ChronoUnit
  * used to export cache activity to a metrics backend or to any other
  * monitoring infrastructure.
  *
- * Listener methods are invoked synchronously on the fiber interacting with
- * the cache, potentially on its hot path, so implementations must be fast,
- * non-blocking, and must not throw exceptions. Any exceptions thrown by a
- * listener will be ignored. All methods have no-op default implementations
- * so implementations only need to override the events they are interested
- * in.
+ * The effects returned by a listener are executed on the fiber interacting
+ * with the cache, potentially on its hot path, so they should be fast and
+ * non-blocking. A failure of a listener effect is logged and does not affect
+ * the operation of the cache.
  */
 trait CacheListener[-Key, -Error, -Value] {
 
@@ -41,30 +39,26 @@ trait CacheListener[-Key, -Error, -Value] {
    * Called when a value associated with the specified key is found in the
    * cache.
    */
-  def onHit(key: Key)(implicit unsafe: Unsafe): Unit =
-    ()
+  def onHit(key: Key): UIO[Unit]
 
   /**
    * Called when no value associated with the specified key is found in the
    * cache and the lookup function will be triggered.
    */
-  def onMiss(key: Key)(implicit unsafe: Unsafe): Unit =
-    ()
+  def onMiss(key: Key): UIO[Unit]
 
   /**
    * Called when a lookup completes, whether triggered by `get` or by
    * `refresh`, with the `Exit` value produced by the lookup function and the
    * time the lookup took.
    */
-  def onLoad(key: Key, exit: Exit[Error, Value], loadTime: Duration)(implicit unsafe: Unsafe): Unit =
-    ()
+  def onLoad(key: Key, exit: Exit[Error, Value], loadTime: Duration): UIO[Unit]
 
   /**
    * Called when an entry associated with the specified key is removed from
-   * the cache. Note that no events are emitted by `invalidateAll`.
+   * the cache.
    */
-  def onEviction(key: Key, cause: CacheListener.EvictionCause)(implicit unsafe: Unsafe): Unit =
-    ()
+  def onEviction(key: Key, cause: CacheListener.EvictionCause): UIO[Unit]
 }
 
 object CacheListener {
@@ -97,7 +91,12 @@ object CacheListener {
    * A listener that ignores all events.
    */
   val noop: CacheListener[Any, Any, Any] =
-    new CacheListener[Any, Any, Any] {}
+    new CacheListener[Any, Any, Any] {
+      def onHit(key: Any): UIO[Unit]                                            = Exit.unit
+      def onMiss(key: Any): UIO[Unit]                                           = Exit.unit
+      def onLoad(key: Any, exit: Exit[Any, Any], loadTime: Duration): UIO[Unit] = Exit.unit
+      def onEviction(key: Any, cause: EvictionCause): UIO[Unit]                 = Exit.unit
+    }
 
   /**
    * A listener that reports cache events with ZIO metrics, tagging each
@@ -126,23 +125,21 @@ object CacheListener {
       private val expiredEvictions     = evictions.tagged("cause", "expired")
       private val invalidatedEvictions = evictions.tagged("cause", "invalidated")
 
-      override def onHit(key: Any)(implicit unsafe: Unsafe): Unit =
-        hits.unsafe.update(1L)
+      def onHit(key: Any): UIO[Unit] =
+        hits.update(1L)
 
-      override def onMiss(key: Any)(implicit unsafe: Unsafe): Unit =
-        misses.unsafe.update(1L)
+      def onMiss(key: Any): UIO[Unit] =
+        misses.update(1L)
 
-      override def onLoad(key: Any, exit: Exit[Any, Any], loadTime: Duration)(implicit unsafe: Unsafe): Unit = {
-        if (exit.isSuccess) loadSuccesses.unsafe.update(1L)
-        else loadFailures.unsafe.update(1L)
-        loadDuration.unsafe.update(loadTime)
-      }
+      def onLoad(key: Any, exit: Exit[Any, Any], loadTime: Duration): UIO[Unit] =
+        (if (exit.isSuccess) loadSuccesses.update(1L) else loadFailures.update(1L)) *>
+          loadDuration.update(loadTime)
 
-      override def onEviction(key: Any, cause: EvictionCause)(implicit unsafe: Unsafe): Unit =
+      def onEviction(key: Any, cause: EvictionCause): UIO[Unit] =
         cause match {
-          case EvictionCause.Capacity    => capacityEvictions.unsafe.update(1L)
-          case EvictionCause.Expired     => expiredEvictions.unsafe.update(1L)
-          case EvictionCause.Invalidated => invalidatedEvictions.unsafe.update(1L)
+          case EvictionCause.Capacity    => capacityEvictions.update(1L)
+          case EvictionCause.Expired     => expiredEvictions.update(1L)
+          case EvictionCause.Invalidated => invalidatedEvictions.update(1L)
         }
     }
 }

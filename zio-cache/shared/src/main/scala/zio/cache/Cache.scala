@@ -24,7 +24,6 @@ import java.time.{Duration, Instant}
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
 import scala.annotation.tailrec
-import scala.util.control.NonFatal
 
 /**
  * A `Cache` is defined in terms of a lookup function that, given a key of
@@ -236,7 +235,6 @@ object Cache {
     override def get(in: In)(implicit trace: Trace): IO[Error, Value] =
       ZIO.uninterruptibleMask(implicit res => getUnsafe(in))
 
-    @tailrec
     private def getUnsafe(in: In)(implicit restore: ZIO.InterruptibilityRestorer, trace: Trace): IO[Error, Value] = {
       val k                              = keyBy(in)
       var key: MapKey[Key]               = null
@@ -250,32 +248,28 @@ object Cache {
 
       value match {
         case null =>
-          trackAccess(key)
-          trackMiss(k)
-          lookupValueOf(in, k, promise)
+          trackAccess(key) *> trackMiss(k) *> lookupValueOf(in, k, promise)
         case MapValue.Pending(key, promise) =>
-          trackAccess(key)
-          trackHit(k)
-          restore(promise.await)
+          trackAccess(key) *> trackHit(k) *> restore(promise.await)
         case MapValue.Complete(key, exit, _, timeToLive) =>
-          trackAccess(key)
+          val accessed = trackAccess(key)
           if (hasExpired(timeToLive)) {
-            if (map.remove(k, value)) trackEviction(k, CacheListener.EvictionCause.Expired)
-            getUnsafe(in)
+            val evicted = if (map.remove(k, value)) trackEviction(k, CacheListener.EvictionCause.Expired) else Exit.unit
+            accessed *> evicted *> getUnsafe(in)
           } else {
-            trackHit(k)
-            exit
+            accessed *> trackHit(k) *> exit
           }
         case MapValue.Refreshing(
               promiseInProgress,
               MapValue.Complete(mapKey, currentResult, _, ttl)
             ) =>
-          trackAccess(mapKey)
-          trackHit(k)
-          if (hasExpired(ttl)) {
-            restore(promiseInProgress.await)
-          } else {
-            currentResult
+          val accessed = trackAccess(mapKey)
+          accessed *> trackHit(k) *> {
+            if (hasExpired(ttl)) {
+              restore(promiseInProgress.await)
+            } else {
+              currentResult
+            }
           }
       }
     }
@@ -295,8 +289,9 @@ object Cache {
             restore(promiseInProgress.await)
           case completedResult @ MapValue.Complete(_, _, _, ttl) =>
             if (hasExpired(ttl)) {
-              if (map.remove(k, value)) trackEviction(k, CacheListener.EvictionCause.Expired)
-              getUnsafe(in)
+              val evicted =
+                if (map.remove(k, value)) trackEviction(k, CacheListener.EvictionCause.Expired) else Exit.unit
+              evicted *> getUnsafe(in)
             } else {
               // Only trigger the lookup if we're still the current value, `completedResult`
               lookupValueOf(in, k, promise).whenDiscard {
@@ -309,13 +304,30 @@ object Cache {
       }
 
     override def invalidate(in: In)(implicit trace: Trace): UIO[Unit] =
-      ZIO.succeed {
+      ZIO.suspendSucceed {
         val k = keyBy(in)
         if (map.remove(k) ne null) trackEviction(k, CacheListener.EvictionCause.Invalidated)
+        else Exit.unit
       }
 
     override def invalidateAll: UIO[Unit] =
-      ZIO.succeed(map.clear())
+      ZIO.suspendSucceed {
+        if (isNoopListener) {
+          map.clear()
+          Exit.unit
+        } else {
+          var invalidated: List[Key] = Nil
+          val iterator               = map.keySet().iterator()
+          while (iterator.hasNext) {
+            val key = iterator.next()
+            if (map.remove(key) ne null) {
+              invalidated = key :: invalidated
+            }
+          }
+          if (invalidated eq Nil) Exit.unit
+          else ZIO.foreachDiscard(invalidated)(key => trackEviction(key, CacheListener.EvictionCause.Invalidated))
+        }
+      }
 
     def size(implicit trace: Trace): UIO[Int] =
       ZIO.succeed(map.size)
@@ -332,16 +344,14 @@ object Cache {
               val interrupter = c.interruptOption.getOrElse(fiberId)
               promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
               map.remove(key)
-              trackLoad(key, exit, startNanos)
-              exit
+              trackLoad(key, exit, startNanos) *> exit
             case exit =>
               val now        = clock.unsafe.instant()(Unsafe)
               val entryStats = EntryStats(now)
 
               map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
               promise.unsafe.done(exit)(Unsafe)
-              trackLoad(key, exit, startNanos)
-              exit
+              trackLoad(key, exit, startNanos) *> exit
           }
       }
 
@@ -351,8 +361,12 @@ object Cache {
     private def hasExpired(timeToLive: Instant) =
       clock.unsafe.instant()(Unsafe).isAfter(timeToLive)
 
-    private def trackAccess(key: MapKey[Key]): Unit = {
-      @tailrec def loop(): Unit = {
+    private def trackAccess(key: MapKey[Key]): UIO[Unit] = {
+      // Eviction notifications are collected while holding the `updating`
+      // flag and sequenced onto the calling fiber afterwards, so listener
+      // effects never run inside the lock.
+      @tailrec def loop(evicted0: List[Key]): List[Key] = {
+        var evicted = evicted0
         if (updating.compareAndSet(false, true)) {
           var loop = true
           while (loop) {
@@ -369,7 +383,7 @@ object Cache {
             val key = keys.remove()
             if (key ne null) {
               if (map.remove(key.value) ne null) {
-                trackEviction(key.value, CacheListener.EvictionCause.Capacity)
+                if (!isNoopListener) evicted = key.value :: evicted
                 size -= 1
                 loop = size > capacity
               }
@@ -381,38 +395,45 @@ object Cache {
         }
 
         // Someone might have added a key right after we drained the queue but before setting updating to `false`
-        if (!accesses.isEmpty()) loop() else ()
+        if (!accesses.isEmpty()) loop(evicted) else evicted
       }
 
       accesses.offer(key)
-      loop()
+      val evicted = loop(Nil)
+      if (evicted eq Nil) Exit.unit
+      else ZIO.foreachDiscard(evicted)(key => trackEviction(key, CacheListener.EvictionCause.Capacity))
     }
 
-    private def trackHit(key: Key): Unit = {
+    private def trackHit(key: Key): UIO[Unit] = {
       hits.increment()
-      notifyListener(listener.onHit(key)(Unsafe))
+      notifyListener(listener.onHit(key))
     }
 
-    private def trackMiss(key: Key): Unit = {
+    private def trackMiss(key: Key): UIO[Unit] = {
       misses.increment()
-      notifyListener(listener.onMiss(key)(Unsafe))
+      notifyListener(listener.onMiss(key))
     }
 
-    private def trackLoad(key: Key, exit: Exit[Error, Value], startNanos: Long): Unit =
+    private def trackLoad(key: Key, exit: Exit[Error, Value], startNanos: Long): UIO[Unit] =
       notifyListener {
         val loadTime = Duration.ofNanos(clock.unsafe.nanoTime()(Unsafe) - startNanos)
-        listener.onLoad(key, exit, loadTime)(Unsafe)
+        listener.onLoad(key, exit, loadTime)
       }
 
-    private def trackEviction(key: Key, cause: CacheListener.EvictionCause): Unit =
-      notifyListener(listener.onEviction(key, cause)(Unsafe))
+    private def trackEviction(key: Key, cause: CacheListener.EvictionCause): UIO[Unit] =
+      notifyListener(listener.onEviction(key, cause))
 
-    // Listeners must not throw but a listener that does anyway must not be
-    // able to corrupt the internal state of the cache or leave a promise
-    // uncompleted.
-    private def notifyListener(f: => Unit): Unit =
-      try f
-      catch { case NonFatal(_) => () }
+    private[this] val isNoopListener = listener eq CacheListener.noop
+
+    // A failing listener must not be able to affect the operation of the
+    // cache, so failures and defects of the listener effect are logged and
+    // discarded.
+    private def notifyListener(f: => UIO[Unit]): UIO[Unit] =
+      if (isNoopListener) Exit.unit
+      else
+        ZIO
+          .suspendSucceed(f)
+          .catchAllCause(cause => ZIO.logErrorCause("A CacheListener failed to process a cache event", cause))
   }
 
   /**

@@ -19,29 +19,23 @@ object CacheListenerSpec extends ZIOSpecDefault {
     val expired       = new AtomicInteger(0)
     val invalidated   = new AtomicInteger(0)
 
-    override def onHit(key: Any)(implicit unsafe: Unsafe): Unit = {
-      hits.incrementAndGet()
-      ()
-    }
+    def onHit(key: Any): UIO[Unit] =
+      ZIO.succeed(hits.incrementAndGet()).unit
 
-    override def onMiss(key: Any)(implicit unsafe: Unsafe): Unit = {
-      misses.incrementAndGet()
-      ()
-    }
+    def onMiss(key: Any): UIO[Unit] =
+      ZIO.succeed(misses.incrementAndGet()).unit
 
-    override def onLoad(key: Any, exit: Exit[Any, Any], loadTime: JDuration)(implicit unsafe: Unsafe): Unit = {
-      if (exit.isSuccess) loadSuccesses.incrementAndGet() else loadFailures.incrementAndGet()
-      ()
-    }
+    def onLoad(key: Any, exit: Exit[Any, Any], loadTime: JDuration): UIO[Unit] =
+      ZIO.succeed(if (exit.isSuccess) loadSuccesses.incrementAndGet() else loadFailures.incrementAndGet()).unit
 
-    override def onEviction(key: Any, cause: EvictionCause)(implicit unsafe: Unsafe): Unit = {
-      cause match {
-        case EvictionCause.Capacity    => capacity.incrementAndGet()
-        case EvictionCause.Expired     => expired.incrementAndGet()
-        case EvictionCause.Invalidated => invalidated.incrementAndGet()
-      }
-      ()
-    }
+    def onEviction(key: Any, cause: EvictionCause): UIO[Unit] =
+      ZIO.succeed {
+        cause match {
+          case EvictionCause.Capacity    => capacity.incrementAndGet()
+          case EvictionCause.Expired     => expired.incrementAndGet()
+          case EvictionCause.Invalidated => invalidated.incrementAndGet()
+        }
+      }.unit
   }
 
   def hash(x: Int): Int => UIO[Int] =
@@ -129,6 +123,18 @@ object CacheListenerSpec extends ZIOSpecDefault {
         _     <- cache.invalidate(43)
       } yield assertTrue(listener.invalidated.get == 1)
     },
+    test("eviction events for invalidateAll") {
+      val listener = new TestListener
+      for {
+        cache <- Cache.make(100, Duration.Infinity, Lookup(identity), listener)
+        _     <- ZIO.foreachDiscard(1 to 10)(cache.get)
+        _     <- cache.invalidateAll
+        size  <- cache.size
+      } yield assertTrue(
+        size == 0,
+        listener.invalidated.get == 10
+      )
+    },
     test("listener is notified with the keys produced by the keying function") {
       val listener = new TestListener
       for {
@@ -145,14 +151,12 @@ object CacheListenerSpec extends ZIOSpecDefault {
         listener.hits.get == 2
       )
     },
-    test("a listener that throws does not affect the cache") {
+    test("a failing listener does not affect the cache") {
       val listener = new CacheListener[Any, Any, Any] {
-        override def onHit(key: Any)(implicit unsafe: Unsafe): Unit  = throw new RuntimeException("onHit")
-        override def onMiss(key: Any)(implicit unsafe: Unsafe): Unit = throw new RuntimeException("onMiss")
-        override def onLoad(key: Any, exit: Exit[Any, Any], loadTime: JDuration)(implicit u: Unsafe): Unit =
-          throw new RuntimeException("onLoad")
-        override def onEviction(key: Any, cause: EvictionCause)(implicit unsafe: Unsafe): Unit =
-          throw new RuntimeException("onEviction")
+        def onHit(key: Any): UIO[Unit]                                             = throw new RuntimeException("onHit")
+        def onMiss(key: Any): UIO[Unit]                                            = ZIO.dieMessage("onMiss")
+        def onLoad(key: Any, exit: Exit[Any, Any], loadTime: JDuration): UIO[Unit] = ZIO.dieMessage("onLoad")
+        def onEviction(key: Any, cause: EvictionCause): UIO[Unit]                  = throw new RuntimeException("onEviction")
       }
       for {
         cache <- Cache.make(100, Duration.Infinity, Lookup(identity), listener)
@@ -161,7 +165,7 @@ object CacheListenerSpec extends ZIOSpecDefault {
         _     <- cache.invalidate(42)
         stats <- cache.cacheStats
       } yield assertTrue(a == 42, b == 42, stats.hits == 1L, stats.misses == 1L)
-    },
+    } @@ TestAspect.silentLogging,
     test("metrics listener reports cache events with ZIO metrics") {
       val name = "metrics-listener-spec"
       for {

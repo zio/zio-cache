@@ -92,14 +92,14 @@ import zio._
 sealed trait EvictionCause // Capacity, Expired, or Invalidated
 
 trait CacheListener[-Key, -Error, -Value] {
-  def onHit(key: Key)(implicit unsafe: Unsafe): Unit
-  def onMiss(key: Key)(implicit unsafe: Unsafe): Unit
-  def onLoad(key: Key, exit: Exit[Error, Value], loadTime: java.time.Duration)(implicit unsafe: Unsafe): Unit
-  def onEviction(key: Key, cause: EvictionCause)(implicit unsafe: Unsafe): Unit
+  def onHit(key: Key): UIO[Unit]
+  def onMiss(key: Key): UIO[Unit]
+  def onLoad(key: Key, exit: Exit[Error, Value], loadTime: java.time.Duration): UIO[Unit]
+  def onEviction(key: Key, cause: EvictionCause): UIO[Unit]
 }
 ```
 
-All methods have no-op default implementations, so a listener only needs to override the events it is interested in. Listeners are invoked synchronously on the hot path of the cache, so they must be fast, non-blocking, and must not throw exceptions.
+The effects returned by a listener are executed on the fiber interacting with the cache, potentially on its hot path, so they should be fast and non-blocking. A failure of a listener effect is logged and does not affect the operation of the cache.
 
 A listener is attached when the cache is constructed, using the overloads of `make`, `makeWith`, and `makeWithKey` that accept a `CacheListener`. The library also ships with a ready-made listener that reports cache events with ZIO metrics:
 
