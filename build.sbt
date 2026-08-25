@@ -125,6 +125,7 @@ lazy val docs = project
 lazy val enforceMimaCompatibility = true // Enable / disable failing CI on binary incompatibilities
 
 lazy val mimaFilters = Seq(
+  ProblemFilters.exclude[Problem]("zio.cache.Cache#CacheImplementation*"),
   ProblemFilters.exclude[Problem]("zio.cache.ScopedCacheImplementation#CacheState.map"),
   ProblemFilters.exclude[MissingClassProblem]("zio.cache.Platform*"),
   ProblemFilters.exclude[Problem]("zio.cache.Cache#CacheState*"),
