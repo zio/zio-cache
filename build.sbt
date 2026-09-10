@@ -7,8 +7,8 @@ enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
 lazy val scala212V = "2.12.21"
 lazy val scala213V = "2.13.18"
-lazy val scala3V   = "3.3.8"
-lazy val allScalas = List("2.12", "2.13", "3.3")
+lazy val scala3V   = "3.9.0"
+lazy val allScalas = List("2.12.x", "2.13.x", "3.x")
 
 inThisBuild(
   List(
@@ -56,15 +56,11 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
     crossScalaVersions := List(scala212V, scala213V, scala3V),
-    stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), enableCrossProject = true),
+    stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), javaPlatform = "17", enableCrossProject = true),
     silencerSettings,
     enableZIO(),
     libraryDependencies ++= Seq(
       "org.scala-lang.modules" %% "scala-collection-compat" % ScalaCollectionCompatVersion
-    ),
-    scalacOptions ++= Seq(
-      "-release",
-      "17"
     ),
     scalacOptions ++=
       (if (scalaBinaryVersion.value == "3")
@@ -98,7 +94,7 @@ lazy val zioCacheNative = zioCache.native
 
 lazy val benchmarks = project
   .in(file("zio-cache-benchmarks"))
-  .settings(stdSettings(name = Some("zio-cache-benchmarks"), packageName = Some("zio.cache")))
+  .settings(stdSettings(name = Some("zio-cache-benchmarks"), packageName = Some("zio.cache"), javaPlatform = "17"))
   .settings(
     crossScalaVersions := List(scala213V, scala3V),
     publish / skip     := true

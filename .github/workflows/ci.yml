@@ -88,15 +88,15 @@ jobs:
         - '21'
         - '25'
         scala-project:
-        - ++2.12 zioCacheJVM
-        - ++2.13 zioCacheJVM
-        - ++3.3 zioCacheJVM
-        - ++2.12 zioCacheJS
-        - ++2.13 zioCacheJS
-        - ++3.3 zioCacheJS
-        - ++2.12 zioCacheNative
-        - ++2.13 zioCacheNative
-        - ++3.3 zioCacheNative
+        - ++2.12.x zioCacheJVM
+        - ++2.13.x zioCacheJVM
+        - ++3.x zioCacheJVM
+        - ++2.12.x zioCacheJS
+        - ++2.13.x zioCacheJS
+        - ++3.x zioCacheJS
+        - ++2.12.x zioCacheNative
+        - ++2.13.x zioCacheNative
+        - ++3.x zioCacheNative
     steps:
     - name: Install libuv
       run: sudo apt-get update && sudo apt-get install -y libuv1-dev
