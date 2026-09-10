@@ -25,7 +25,7 @@ inThisBuild(
       )
     ),
     ciEnabledBranches    := Seq("series/2.x"),
-    ciTargetJavaVersions := List("11", "21"),
+    ciTargetJavaVersions := List("17", "21", "25"),
     ciTargetScalaVersions := Map(
       (zioCacheJVM / thisProject).value.id    -> allScalas,
       (zioCacheJS / thisProject).value.id     -> allScalas,
