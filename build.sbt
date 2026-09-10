@@ -64,7 +64,7 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
     ),
     scalacOptions ++= Seq(
       "-release",
-      "11"
+      "17"
     ),
     scalacOptions ++=
       (if (scalaBinaryVersion.value == "3")
