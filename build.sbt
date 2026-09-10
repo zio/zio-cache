@@ -13,7 +13,7 @@ lazy val allScalas = List("2.12.x", "2.13.x", "3.x")
 inThisBuild(
   List(
     name             := "ZIO Cache",
-    zioVersion       := "2.1.24",
+    zioVersion       := "2.1.26",
     scalaVersion     := scala213V,
     ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
