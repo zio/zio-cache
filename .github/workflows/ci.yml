@@ -84,8 +84,9 @@ jobs:
       fail-fast: false
       matrix:
         java:
-        - '11'
+        - '17'
         - '21'
+        - '25'
         scala-project:
         - ++2.12 zioCacheJVM
         - ++2.13 zioCacheJVM
