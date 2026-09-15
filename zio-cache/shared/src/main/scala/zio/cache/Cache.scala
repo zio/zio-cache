@@ -109,6 +109,18 @@ object Cache {
     makeWith(capacity, lookup)(_ => timeToLive)
 
   /**
+   * Constructs a new cache with the specified capacity, time to live, lookup
+   * function, and listener that will be notified of cache events.
+   */
+  def make[Key, Environment, Error, Value](
+    capacity: Int,
+    timeToLive: Duration,
+    lookup: Lookup[Key, Environment, Error, Value],
+    listener: CacheListener[Key, Error, Value]
+  )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
+    makeWith(capacity, lookup, listener)(_ => timeToLive)
+
+  /**
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function, where the time to live can depend on the `Exit` value
    * returned by the lookup function.
@@ -120,6 +132,21 @@ object Cache {
     timeToLive: Exit[Error, Value] => Duration
   )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
     makeWithKey(capacity, lookup)(timeToLive, identity)
+
+  /**
+   * Constructs a new cache with the specified capacity, time to live, lookup
+   * function, and listener that will be notified of cache events, where the
+   * time to live can depend on the `Exit` value returned by the lookup
+   * function.
+   */
+  def makeWith[Key, Environment, Error, Value](
+    capacity: Int,
+    lookup: Lookup[Key, Environment, Error, Value],
+    listener: CacheListener[Key, Error, Value]
+  )(
+    timeToLive: Exit[Error, Value] => Duration
+  )(implicit trace: Trace): URIO[Environment, Cache[Key, Error, Value]] =
+    makeWithKey(capacity, lookup, listener)(timeToLive, identity)
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
@@ -138,10 +165,33 @@ object Cache {
     timeToLive: Exit[Error, Value] => Duration,
     keyBy: In => Key
   )(implicit trace: Trace): URIO[Environment, Cache[In, Error, Value]] =
+    makeWithKey(capacity, lookup, CacheListener.noop)(timeToLive, keyBy)
+
+  /**
+   * Constructs a new cache with the specified capacity, time to live, lookup
+   * function, and listener that will be notified of cache events, where the
+   * time to live can depend on the `Exit` value returned by the lookup
+   * function.
+   *
+   * This variant also allows specifying a custom keying function that will be
+   * used to to convert the input of the lookup function into the key in the
+   * underlying cache. This can be useful when the input to the lookup function
+   * is large and you do not want to store it in the cache. The listener will
+   * be notified with the keys in the underlying cache, that is, the keys
+   * produced by the keying function.
+   */
+  def makeWithKey[In, Key, Environment, Error, Value](
+    capacity: Int,
+    lookup: Lookup[In, Environment, Error, Value],
+    listener: CacheListener[Key, Error, Value]
+  )(
+    timeToLive: Exit[Error, Value] => Duration,
+    keyBy: In => Key
+  )(implicit trace: Trace): URIO[Environment, Cache[In, Error, Value]] =
     ZIO.clockWith { clock =>
       ZIO.environmentWithZIO[Environment] { environment =>
         ZIO.fiberId.map { fiberId =>
-          new CacheImplementation(capacity, lookup, timeToLive, keyBy, clock, environment, fiberId)
+          new CacheImplementation(capacity, lookup, timeToLive, keyBy, clock, environment, fiberId, listener)
         }
       }
     }
@@ -153,7 +203,8 @@ object Cache {
     keyBy: In => Key,
     clock: Clock,
     environment: ZEnvironment[Environment],
-    fiberId: FiberId.Runtime
+    fiberId: FiberId.Runtime,
+    listener: CacheListener[Key, Error, Value]
   )(implicit trace: Trace)
       extends Cache[In, Error, Value] {
 
@@ -184,7 +235,6 @@ object Cache {
     override def get(in: In)(implicit trace: Trace): IO[Error, Value] =
       ZIO.uninterruptibleMask(implicit res => getUnsafe(in))
 
-    @tailrec
     private def getUnsafe(in: In)(implicit restore: ZIO.InterruptibilityRestorer, trace: Trace): IO[Error, Value] = {
       val k                              = keyBy(in)
       var key: MapKey[Key]               = null
@@ -198,32 +248,28 @@ object Cache {
 
       value match {
         case null =>
-          trackAccess(key)
-          trackMiss()
-          lookupValueOf(in, k, promise)
+          trackAccess(key) *> trackMiss(k) *> lookupValueOf(in, k, promise)
         case MapValue.Pending(key, promise) =>
-          trackAccess(key)
-          trackHit()
-          restore(promise.await)
+          trackAccess(key) *> trackHit(k) *> restore(promise.await)
         case MapValue.Complete(key, exit, _, timeToLive) =>
-          trackAccess(key)
+          val accessed = trackAccess(key)
           if (hasExpired(timeToLive)) {
-            map.remove(k, value)
-            getUnsafe(in)
+            val evicted = if (map.remove(k, value)) trackEviction(k, CacheListener.EvictionCause.Expired) else Exit.unit
+            accessed *> evicted *> getUnsafe(in)
           } else {
-            trackHit()
-            exit
+            accessed *> trackHit(k) *> exit
           }
         case MapValue.Refreshing(
               promiseInProgress,
               MapValue.Complete(mapKey, currentResult, _, ttl)
             ) =>
-          trackAccess(mapKey)
-          trackHit()
-          if (hasExpired(ttl)) {
-            restore(promiseInProgress.await)
-          } else {
-            currentResult
+          val accessed = trackAccess(mapKey)
+          accessed *> trackHit(k) *> {
+            if (hasExpired(ttl)) {
+              restore(promiseInProgress.await)
+            } else {
+              currentResult
+            }
           }
       }
     }
@@ -243,8 +289,9 @@ object Cache {
             restore(promiseInProgress.await)
           case completedResult @ MapValue.Complete(_, _, _, ttl) =>
             if (hasExpired(ttl)) {
-              map.remove(k, value)
-              getUnsafe(in)
+              val evicted =
+                if (map.remove(k, value)) trackEviction(k, CacheListener.EvictionCause.Expired) else Exit.unit
+              evicted *> getUnsafe(in)
             } else {
               // Only trigger the lookup if we're still the current value, `completedResult`
               lookupValueOf(in, k, promise).whenDiscard {
@@ -257,10 +304,30 @@ object Cache {
       }
 
     override def invalidate(in: In)(implicit trace: Trace): UIO[Unit] =
-      ZIO.succeed(map.remove(keyBy(in)): Unit)
+      ZIO.suspendSucceed {
+        val k = keyBy(in)
+        if (map.remove(k) ne null) trackEviction(k, CacheListener.EvictionCause.Invalidated)
+        else Exit.unit
+      }
 
     override def invalidateAll: UIO[Unit] =
-      ZIO.succeed(map.clear())
+      ZIO.suspendSucceed {
+        if (isNoopListener) {
+          map.clear()
+          Exit.unit
+        } else {
+          var invalidated: List[Key] = Nil
+          val iterator               = map.keySet().iterator()
+          while (iterator.hasNext) {
+            val key = iterator.next()
+            if (map.remove(key) ne null) {
+              invalidated = key :: invalidated
+            }
+          }
+          if (invalidated eq Nil) Exit.unit
+          else ZIO.foreachDiscard(invalidated)(key => trackEviction(key, CacheListener.EvictionCause.Invalidated))
+        }
+      }
 
     def size(implicit trace: Trace): UIO[Int] =
       ZIO.succeed(map.size)
@@ -268,22 +335,25 @@ object Cache {
     private def lookupValueOf(in: In, key: Key, promise: Promise[Error, Value])(implicit
       restore: ZIO.InterruptibilityRestorer
     ): IO[Error, Value] =
-      restore(lookup(in))
-        .provideEnvironment(environment)
-        .exitWith {
-          case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
-            val interrupter = c.interruptOption.getOrElse(fiberId)
-            promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
-            map.remove(key)
-            exit
-          case exit =>
-            val now        = clock.unsafe.instant()(Unsafe)
-            val entryStats = EntryStats(now)
+      ZIO.suspendSucceed {
+        val startNanos = clock.unsafe.nanoTime()(Unsafe)
+        restore(lookup(in))
+          .provideEnvironment(environment)
+          .exitWith {
+            case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
+              val interrupter = c.interruptOption.getOrElse(fiberId)
+              promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
+              map.remove(key)
+              trackLoad(key, exit, startNanos) *> exit
+            case exit =>
+              val now        = clock.unsafe.instant()(Unsafe)
+              val entryStats = EntryStats(now)
 
-            map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
-            promise.unsafe.done(exit)(Unsafe)
-            exit
-        }
+              map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+              promise.unsafe.done(exit)(Unsafe)
+              trackLoad(key, exit, startNanos) *> exit
+          }
+      }
 
     private def newPromise() =
       Promise.unsafe.make[Error, Value](fiberId)(Unsafe)
@@ -291,8 +361,12 @@ object Cache {
     private def hasExpired(timeToLive: Instant) =
       clock.unsafe.instant()(Unsafe).isAfter(timeToLive)
 
-    private def trackAccess(key: MapKey[Key]): Unit = {
-      @tailrec def loop(): Unit = {
+    private def trackAccess(key: MapKey[Key]): UIO[Unit] = {
+      // Eviction notifications are collected while holding the `updating`
+      // flag and sequenced onto the calling fiber afterwards, so listener
+      // effects never run inside the lock.
+      @tailrec def loop(evicted0: List[Key]): List[Key] = {
+        var evicted = evicted0
         if (updating.compareAndSet(false, true)) {
           var loop = true
           while (loop) {
@@ -309,6 +383,7 @@ object Cache {
             val key = keys.remove()
             if (key ne null) {
               if (map.remove(key.value) ne null) {
+                if (!isNoopListener) evicted = key.value :: evicted
                 size -= 1
                 loop = size > capacity
               }
@@ -320,18 +395,45 @@ object Cache {
         }
 
         // Someone might have added a key right after we drained the queue but before setting updating to `false`
-        if (!accesses.isEmpty()) loop() else ()
+        if (!accesses.isEmpty()) loop(evicted) else evicted
       }
 
       accesses.offer(key)
-      loop()
+      val evicted = loop(Nil)
+      if (evicted eq Nil) Exit.unit
+      else ZIO.foreachDiscard(evicted)(key => trackEviction(key, CacheListener.EvictionCause.Capacity))
     }
 
-    private def trackHit(): Unit =
+    private def trackHit(key: Key): UIO[Unit] = {
       hits.increment()
+      notifyListener(listener.onHit(key))
+    }
 
-    private def trackMiss(): Unit =
+    private def trackMiss(key: Key): UIO[Unit] = {
       misses.increment()
+      notifyListener(listener.onMiss(key))
+    }
+
+    private def trackLoad(key: Key, exit: Exit[Error, Value], startNanos: Long): UIO[Unit] =
+      notifyListener {
+        val loadTime = Duration.ofNanos(clock.unsafe.nanoTime()(Unsafe) - startNanos)
+        listener.onLoad(key, exit, loadTime)
+      }
+
+    private def trackEviction(key: Key, cause: CacheListener.EvictionCause): UIO[Unit] =
+      notifyListener(listener.onEviction(key, cause))
+
+    private[this] val isNoopListener = listener eq CacheListener.noop
+
+    // A failing listener must not be able to affect the operation of the
+    // cache, so failures and defects of the listener effect are logged and
+    // discarded.
+    private def notifyListener(f: => UIO[Unit]): UIO[Unit] =
+      if (isNoopListener) Exit.unit
+      else
+        ZIO
+          .suspendSucceed(f)
+          .catchAllCause(cause => ZIO.logErrorCause("A CacheListener failed to process a cache event", cause))
   }
 
   /**
