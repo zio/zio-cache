@@ -94,7 +94,7 @@ jobs:
         - ++2.11.12 zioCacheJVM
         - ++2.12.14 zioCacheJVM
         - ++2.13.6 zioCacheJVM
-        - ++3.0.0 zioCacheJVM
+        - ++3.0.2 zioCacheJVM
     steps:
     - name: Install libuv
       run: sudo apt-get update && sudo apt-get install -y libuv1-dev

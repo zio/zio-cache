@@ -12,10 +12,12 @@ object BuildHelper {
   // hand-maintained and served as the source of truth. Now that zio-sbt-ci generates ci.yml FROM
   // crossScalaVersions (which is built from these constants via stdSettings), that would be
   // circular - so these are the source of truth instead, and ci.yml is downstream of them.
-  val Scala211: String   = "2.11.12"
-  val Scala212: String   = "2.12.14"
-  val Scala213: String   = "2.13.6"
-  val ScalaDotty: String = "3.0.0"
+  val Scala211: String = "2.11.12"
+  val Scala212: String = "2.12.14"
+  val Scala213: String = "2.13.6"
+  // 3.0.0 was pulled from Maven Central shortly after release (a critical bug found right after
+  // launch) and is no longer resolvable on a fresh checkout; 3.0.2 is the latest same-minor patch.
+  val ScalaDotty: String = "3.0.2"
 
   val SilencerVersion = "1.7.5"
 
@@ -253,11 +255,18 @@ object BuildHelper {
     // the pinned Scala 2.13 compiler - several transitive deps (scala-collection-compat, mdoc's
     // scalameta chain) declare newer patch versions than Scala213 above. Pin them back to what
     // this build actually compiles with.
-    dependencyOverrides ++= Seq(
-      "org.scala-lang" % "scala-library"  % scalaVersion.value,
-      "org.scala-lang" % "scala-reflect"  % scalaVersion.value,
-      "org.scala-lang" % "scala-compiler" % scalaVersion.value
-    )
+    // Scala 3 (Dotty) doesn't publish scala-reflect/scala-compiler under those artifact ids, and
+    // its scala-library is versioned on the 2.13.x line, not synced to the 3.x version number - so
+    // this override only applies to the Scala 2 versions it's meant for.
+    dependencyOverrides ++= {
+      if (scalaVersion.value == ScalaDotty) Seq.empty
+      else
+        Seq(
+          "org.scala-lang" % "scala-library"  % scalaVersion.value,
+          "org.scala-lang" % "scala-reflect"  % scalaVersion.value,
+          "org.scala-lang" % "scala-compiler" % scalaVersion.value
+        )
+    }
   )
 
   def macroExpansionSettings = Seq(
