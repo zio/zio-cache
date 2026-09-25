@@ -248,7 +248,16 @@ object BuildHelper {
     Test / parallelExecution := true,
     incOptions ~= (_.withLogRecompileOnMacro(false)),
     autoAPIMappings := true,
-    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library")
+    unusedCompileDependenciesFilter -= moduleFilter("org.scala-js", "scalajs-library"),
+    // sbt >= 1.6 hard-fails (SIP-51) if a resolved scala-library/-reflect/-compiler is newer than
+    // the pinned Scala 2.13 compiler - several transitive deps (scala-collection-compat, mdoc's
+    // scalameta chain) declare newer patch versions than Scala213 above. Pin them back to what
+    // this build actually compiles with.
+    dependencyOverrides ++= Seq(
+      "org.scala-lang" % "scala-library"  % scalaVersion.value,
+      "org.scala-lang" % "scala-reflect"  % scalaVersion.value,
+      "org.scala-lang" % "scala-compiler" % scalaVersion.value
+    )
   )
 
   def macroExpansionSettings = Seq(
