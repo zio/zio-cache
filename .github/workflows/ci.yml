@@ -51,6 +51,8 @@ jobs:
       run: sbt "+zioCacheJVM/mimaReportBinaryIssues; zioCacheJS/mimaReportBinaryIssues"
     - name: Check website build process
       run: free --si -tmws 10 & sbt --no-colors docs/clean; sbt --no-colors docs/buildWebsite
+    - name: Check docs build on a fresh ZIO website
+      run: free --si -tmws 10 & sbt --no-colors docs/checkDocsOnFreshWebsite
   lint:
     name: Lint
     runs-on: ubuntu-latest
