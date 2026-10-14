@@ -13,7 +13,7 @@ lazy val allScalas = List("2.12.x", "2.13.x", "3.x")
 inThisBuild(
   List(
     name             := "ZIO Cache",
-    zioVersion       := "2.1.24",
+    zioVersion       := "2.1.27",
     scalaVersion     := scala213V,
     ciBackgroundJobs := Seq("free --si -tmws 10"),
     developers := List(
@@ -56,7 +56,12 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
     crossScalaVersions := List(scala212V, scala213V, scala3V),
-    stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), javaPlatform = "17", enableCrossProject = true),
+    stdSettings(
+      name = Some("zio-cache"),
+      packageName = Some("zio.cache"),
+      javaPlatform = "17",
+      enableCrossProject = true
+    ),
     silencerSettings,
     enableZIO(),
     libraryDependencies ++= Seq(
