@@ -6,7 +6,7 @@ import zio.sbt.githubactions.Step
 enablePlugins(ZioSbtEcosystemPlugin, ZioSbtCiPlugin)
 
 lazy val scala212V = "2.12.21"
-lazy val scala213V = "2.13.18"
+lazy val scala213V = "3.10.0"
 lazy val scala3V   = "3.9.0"
 lazy val allScalas = List("2.12.x", "2.13.x", "3.x")
 
@@ -56,7 +56,12 @@ lazy val zioCache = crossProject(JSPlatform, JVMPlatform, NativePlatform)
   .in(file("zio-cache"))
   .settings(
     crossScalaVersions := List(scala212V, scala213V, scala3V),
-    stdSettings(name = Some("zio-cache"), packageName = Some("zio.cache"), javaPlatform = "17", enableCrossProject = true),
+    stdSettings(
+      name = Some("zio-cache"),
+      packageName = Some("zio.cache"),
+      javaPlatform = "17",
+      enableCrossProject = true
+    ),
     silencerSettings,
     enableZIO(),
     libraryDependencies ++= Seq(
