@@ -187,6 +187,43 @@ object CacheSpec extends ZIOSpecDefault {
           _        <- promise.succeed(42)
         } yield assertTrue(contains)
       } @@ TestAspect.withLiveClock
-    )
+    ),
+    test("invalidation mid-lookup does not publish stale values") {
+      for {
+        store   <- Ref.make("profile-without-subscription")
+        started <- Promise.make[Nothing, Unit]
+        gate    <- Promise.make[Nothing, Unit]
+        lookup   = Lookup((_: String) => store.get <* (started.succeed(()) *> gate.await))
+        cache   <- Cache.make(100, 5.minutes, lookup)
+        f       <- cache.get("user-1").fork
+        _       <- started.await
+        _       <- store.set("profile-with-subscription")
+        _       <- cache.invalidate("user-1")
+        _       <- gate.succeed(())
+        _       <- f.join
+        out     <- cache.get("user-1")
+      } yield assertTrue(out.contains("-with-"))
+    },
+    test("invalidation mid-refresh does not publish stale values") {
+      for {
+        store   <- Ref.make("v1")
+        started <- Promise.make[Nothing, Unit]
+        gate    <- Promise.make[Nothing, Unit]
+        isSlow  <- Ref.make(false)
+        lookup   = Lookup((_: String) => store.get <* ZIO.whenZIO(isSlow.get)(started.succeed(()) *> gate.await))
+        cache   <- Cache.make(100, 5.minutes, lookup)
+        initial <- cache.get("user-1")
+        _       <- isSlow.set(true)
+        _       <- store.set("v2-stale")
+        f       <- cache.refresh("user-1").fork
+        _       <- started.await
+        _       <- isSlow.set(false)
+        _       <- store.set("v3-fresh")
+        _       <- cache.invalidate("user-1")
+        _       <- gate.succeed(())
+        _       <- f.join
+        out     <- cache.get("user-1")
+      } yield assertTrue(initial == "v1", out == "v3-fresh")
+    }
   )
 }

@@ -186,21 +186,23 @@ object Cache {
 
     @tailrec
     private def getUnsafe(in: In)(implicit restore: ZIO.InterruptibilityRestorer, trace: Trace): IO[Error, Value] = {
-      val k                              = keyBy(in)
-      var key: MapKey[Key]               = null
-      var promise: Promise[Error, Value] = null
-      var value                          = map.get(k)
+      val k                                    = keyBy(in)
+      var key: MapKey[Key]                     = null
+      var promise: Promise[Error, Value]       = null
+      var pending: MapValue[Key, Error, Value] = null
+      var value                                = map.get(k)
       if (value eq null) {
         promise = newPromise()
         key = new MapKey(k)
-        value = map.putIfAbsent(k, MapValue.Pending(key, promise))
+        pending = MapValue.Pending(key, promise)
+        value = map.putIfAbsent(k, pending)
       }
 
       value match {
         case null =>
           trackAccess(key)
           trackMiss()
-          lookupValueOf(in, k, promise)
+          lookupValueOf(in, k, promise, pending)
         case MapValue.Pending(key, promise) =>
           trackAccess(key)
           trackHit()
@@ -230,15 +232,17 @@ object Cache {
 
     override def refresh(in: In): IO[Error, Unit] =
       ZIO.uninterruptibleMask { implicit restore =>
-        val k       = keyBy(in)
-        val promise = newPromise()
-        var value   = map.get(k)
+        val k                                    = keyBy(in)
+        val promise                              = newPromise()
+        var pending: MapValue[Key, Error, Value] = null
+        var value                                = map.get(k)
         if (value eq null) {
-          value = map.putIfAbsent(k, MapValue.Pending(new MapKey(k), promise))
+          pending = MapValue.Pending(new MapKey(k), promise)
+          value = map.putIfAbsent(k, pending)
         }
         (value match {
           case null =>
-            lookupValueOf(in, k, promise)
+            lookupValueOf(in, k, promise, pending)
           case MapValue.Pending(_, promiseInProgress) =>
             restore(promiseInProgress.await)
           case completedResult @ MapValue.Complete(_, _, _, ttl) =>
@@ -246,9 +250,10 @@ object Cache {
               map.remove(k, value)
               getUnsafe(in)
             } else {
+              val refreshing = MapValue.Refreshing(promise, completedResult)
               // Only trigger the lookup if we're still the current value, `completedResult`
-              lookupValueOf(in, k, promise).whenDiscard {
-                map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
+              lookupValueOf(in, k, promise, refreshing).whenDiscard {
+                map.replace(k, completedResult, refreshing)
               }
             }
           case MapValue.Refreshing(promiseInProgress, _) =>
@@ -265,7 +270,12 @@ object Cache {
     def size(implicit trace: Trace): UIO[Int] =
       ZIO.succeed(map.size)
 
-    private def lookupValueOf(in: In, key: Key, promise: Promise[Error, Value])(implicit
+    private def lookupValueOf(
+      in: In,
+      key: Key,
+      promise: Promise[Error, Value],
+      expected: MapValue[Key, Error, Value]
+    )(implicit
       restore: ZIO.InterruptibilityRestorer
     ): IO[Error, Value] =
       restore(lookup(in))
@@ -274,13 +284,13 @@ object Cache {
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
             val interrupter = c.interruptOption.getOrElse(fiberId)
             promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
-            map.remove(key)
+            map.remove(key, expected)
             exit
           case exit =>
             val now        = clock.unsafe.instant()(Unsafe)
             val entryStats = EntryStats(now)
 
-            map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+            map.replace(key, expected, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
             promise.unsafe.done(exit)(Unsafe)
             exit
         }
