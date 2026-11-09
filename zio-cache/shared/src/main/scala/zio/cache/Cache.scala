@@ -343,10 +343,12 @@ object Cache {
     private def removeEntryOf(key: MapKey[Key]): Boolean = {
       var value = map.get(key.value)
       // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so the remove is retried
-      def changedBeforeRemove(): Boolean = isEntryOf(key, value) && !map.remove(key.value, value)
-      while (changedBeforeRemove()) value = map.get(key.value)
+      while (changedBeforeRemove(key, value)) value = map.get(key.value)
       isEntryOf(key, value)
     }
+
+    private def changedBeforeRemove(key: MapKey[Key], value: MapValue[Key, Error, Value]): Boolean =
+      isEntryOf(key, value) && !map.remove(key.value, value)
 
     private def isLive(key: MapKey[Key]): Boolean =
       isEntryOf(key, map.get(key.value))

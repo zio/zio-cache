@@ -234,6 +234,7 @@ object CacheSpec extends ZIOSpecDefault {
           one    = new HookKey(1)
           _     <- cache.get(one)
           // Eviction hashes `one` to read its entry, then again to remove it: refresh the entry in between
+          // (refreshing a stored entry does not track an access, so it does not re-enter the eviction)
           _ <- ZIO.succeed(one.onHash(2) {
                  Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.refresh(one)).getOrThrowFiberFailure())
                })
