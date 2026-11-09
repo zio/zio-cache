@@ -281,25 +281,30 @@ object Cache {
             val interrupter = c.interruptOption.getOrElse(fiberId)
             promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
             // Only undo the entry this lookup belongs to, not one added after an invalidation
-            var value = map.get(key)
-            while ((value ne null) && (value.key eq mapKey) && !undoLookup(key, value)) value = map.get(key)
+            val current = map.get(key)
+            if (isEntryOf(mapKey, current)) undoLookup(key, current)
             exit
           case exit =>
             val now       = clock.unsafe.instant()(Unsafe)
             val completed = MapValue.Complete(mapKey, exit, EntryStats(now), now.plus(timeToLive(exit)))
 
-            // Only store the result if the entry was not invalidated or evicted while the lookup ran
-            var value = map.get(key)
-            while ((value ne null) && (value.key eq mapKey) && !map.replace(key, value, completed)) value = map.get(key)
+            // Only store the result if the entry was not invalidated or evicted while the lookup ran. No other
+            // lookup writes an entry with this key, so a failed `replace` means the entry is no longer this one.
+            val current = map.get(key)
+            if (isEntryOf(mapKey, current)) map.replace(key, current, completed)
             promise.unsafe.done(exit)(Unsafe)
             exit
         }
 
-    // An interrupted refresh keeps the value it was refreshing
+    /**
+     * Undoes the entry of an interrupted lookup and returns whether it was
+     * undone. An interrupted refresh keeps the value it was refreshing.
+     */
     private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Boolean =
       value match {
+        case _: MapValue.Pending[?, ?, ?]     => map.remove(key, value)
         case MapValue.Refreshing(_, complete) => map.replace(key, value, complete)
-        case _                                => map.remove(key, value)
+        case _: MapValue.Complete[?, ?, ?]    => false
       }
 
     private def newPromise() =
