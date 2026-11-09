@@ -178,23 +178,16 @@ object CacheSpec extends ZIOSpecDefault {
         } yield assertTrue(contains1) && assertTrue(!contains2)
       },
       test("should return true during ongoing lookup") {
-        // `contains` becomes true as soon as `get`'s fiber registers the pending lookup in the
-        // cache's internal map - a synchronous side effect at the very start of `get`, before the
-        // lookup function (which blocks on `promise.await` here) ever runs. A fixed sleep before
-        // checking `contains` doesn't guarantee that fiber has actually been scheduled by then
-        // (flaky under CI load), so poll `contains` until it flips true instead, which only
-        // requires the fiber to eventually run.
         for {
-          promise <- Promise.make[Nothing, Int]
-          cache   <- Cache.make(100, Duration.Infinity, Lookup((_: Int) => promise.await))
-          _       <- cache.get(42).fork
-          contains <- cache
-                        .contains(42)
-                        .repeatUntil((isPending: Boolean) => isPending)
-                        .timeoutFail("cache never registered the pending lookup for key 42")(3.seconds)
-          _ <- promise.succeed(42)
+          started  <- Promise.make[Nothing, Unit]
+          promise  <- Promise.make[Nothing, Int]
+          cache    <- Cache.make(100, Duration.Infinity, Lookup((_: Int) => started.succeed(()) *> promise.await))
+          _        <- cache.get(42).fork
+          _        <- started.await
+          contains <- cache.contains(42)
+          _        <- promise.succeed(42)
         } yield assertTrue(contains)
-      } @@ TestAspect.withLiveClock
+      }
     )
   )
 }
