@@ -303,6 +303,28 @@ object CacheSpec extends ZIOSpecDefault {
           _     <- cache.get(1)
           n     <- calls.get
         } yield assertTrue(n == 2)
+      },
+      test("keeps the previous value when a refresh is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 1) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          _        <- cache.get(1)
+          fiber    <- cache.refresh(1).fork
+          _        <- started.await
+          _        <- fiber.interrupt
+          contains <- cache.contains(1)
+          _        <- cache.get(1)
+          n        <- calls.get
+        } yield assertTrue(contains, n == 2)
       }
     )
   )

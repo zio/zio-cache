@@ -280,9 +280,9 @@ object Cache {
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
             val interrupter = c.interruptOption.getOrElse(fiberId)
             promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
-            // Only remove the entry this lookup belongs to, not one added after an invalidation
+            // Only undo the entry this lookup belongs to, not one added after an invalidation
             var value = map.get(key)
-            while ((value ne null) && (value.key eq mapKey) && !map.remove(key, value)) value = map.get(key)
+            while ((value ne null) && (value.key eq mapKey) && !undoLookup(key, value)) value = map.get(key)
             exit
           case exit =>
             val now       = clock.unsafe.instant()(Unsafe)
@@ -294,6 +294,13 @@ object Cache {
             promise.unsafe.done(exit)(Unsafe)
             exit
         }
+
+    // An interrupted refresh keeps the value it was refreshing
+    private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Boolean =
+      value match {
+        case MapValue.Refreshing(_, complete) => map.replace(key, value, complete)
+        case _                                => map.remove(key, value)
+      }
 
     private def newPromise() =
       Promise.unsafe.make[Error, Value](fiberId)(Unsafe)
