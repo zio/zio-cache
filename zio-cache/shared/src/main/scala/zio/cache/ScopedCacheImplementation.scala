@@ -61,14 +61,14 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
    * the removed entry, or `null` if there was none.
    */
   private def removeEntryOf(key: MapKey[Key]): MapValue[Key, Error, Value] = {
+    def changedBeforeRemove(value: MapValue[Key, Error, Value]): Boolean =
+      isEntryOf(key, value) && !map.remove(key.value, value)
+
     var value = map.get(key.value)
     // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so the remove is retried
-    while (changedBeforeRemove(key, value)) value = map.get(key.value)
+    while (changedBeforeRemove(value)) value = map.get(key.value)
     if (isEntryOf(key, value)) value else null
   }
-
-  private def changedBeforeRemove(key: MapKey[Key], value: MapValue[Key, Error, Value]): Boolean =
-    isEntryOf(key, value) && !map.remove(key.value, value)
 
   private def isLive(key: MapKey[Key]): Boolean =
     isEntryOf(key, map.get(key.value))
