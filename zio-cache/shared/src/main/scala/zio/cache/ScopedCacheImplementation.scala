@@ -23,7 +23,10 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   private def trackAccess(key: MapKey[Key]): Array[MapValue[Key, Error, Value]] = {
     val cleanedKey = scala.collection.mutable.ArrayBuilder.make[MapValue[Key, Error, Value]]
     accesses.offer(key)
-    if (updating.compareAndSet(false, true)) {
+    var accessesQueued = true
+    def tryStartProcessingAccesses(): Boolean =
+      accessesQueued && updating.compareAndSet(false, true)
+    while (tryStartProcessingAccesses()) {
       var loop = true
       while (loop) {
         val key = accesses.poll(null)
@@ -52,6 +55,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
         }
       }
       updating.set(false)
+      // Someone might have added a key right after we drained the queue but before setting updating to `false`
+      accessesQueued = !accesses.isEmpty()
     }
     cleanedKey.result()
   }
@@ -109,19 +114,21 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     }
 
   def freeExpired: UIO[Int] = ZIO.suspendSucceedUnsafe { implicit unsafe =>
-    var expiredKey = List.empty[Key]
+    var removed = List.empty[MapValue.Complete[Key, Error, Value]]
     map.entrySet().forEach { entry =>
       entry.getValue match {
-        case MapValue.Complete(_, _, _, _, ttl) if hasExpired(ttl) =>
-          expiredKey = entry.getKey :: expiredKey
-        case _ =>
+        case complete @ MapValue.Complete(_, _, _, _, ttl) =>
+          // Removing by value keeps an entry that replaced the expired one in the meantime
+          val removedExpired = hasExpired(ttl) && map.remove(entry.getKey, complete)
+          if (removedExpired) removed = complete :: removed
+        case _: MapValue.Pending[?, ?, ?] | _: MapValue.Refreshing[?, ?, ?] =>
           ()
       }
     }
 
     ZIO
-      .foreachDiscard(expiredKey)(invalidate)
-      .as(expiredKey.length)
+      .foreachDiscard(removed)(_.releaseOwner)
+      .as(removed.length)
   }
 
   override def get(k: Key): ZIO[Scope, Error, Value] =
@@ -151,8 +158,13 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             ensureMapSizeNotExceeded(key) *> scoped
           case complete @ MapValue.Complete(key, _, _, _, timeToLive) =>
             if (hasExpired(timeToLive)) {
-              map.remove(k, value)
-              ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(get(k)))
+              // Another fiber may have removed and released this entry already
+              val removedByThisFiber = map.remove(k, value)
+              if (removedByThisFiber) {
+                ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(get(k)))
+              } else {
+                ZIO.succeed(restore(get(k)))
+              }
             } else {
               if (countStats) trackHit()
               ensureMapSizeNotExceeded(key).as(complete.toScoped(getAgainAfterRelease(k)))
