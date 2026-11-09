@@ -960,6 +960,26 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         // The hook runs `refresh` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
       } @@ TestAspect.exceptJS
     ),
+    test("cache hits should not be incremented for expired entries") {
+      for {
+        // Expires between two runs of the background cleaner, which runs every second
+        cache      <- ScopedCache.make(100, 1500.millis, ScopedLookup((key: Int) => ZIO.succeed(key)))
+        _          <- ZIO.scoped(cache.get(42))
+        _          <- TestClock.adjust(1600.millis)
+        _          <- ZIO.scoped(cache.get(42))
+        cacheStats <- cache.cacheStats
+      } yield assertTrue(cacheStats.hits == 0L, cacheStats.misses == 2L)
+    },
+    test("contains returns false for expired entries") {
+      for {
+        // Expires between two runs of the background cleaner, which runs every second
+        cache     <- ScopedCache.make(100, 1500.millis, ScopedLookup((key: Int) => ZIO.succeed(key)))
+        _         <- ZIO.scoped(cache.get(42))
+        contains1 <- cache.contains(42)
+        _         <- TestClock.adjust(1600.millis)
+        contains2 <- cache.contains(42)
+      } yield assertTrue(contains1, !contains2)
+    },
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
       for {

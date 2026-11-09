@@ -91,7 +91,13 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
 
   override def contains(k: Key): UIO[Boolean] =
-    ZIO.succeed(map.containsKey(k))
+    ZIO.succeed {
+      map.get(k) match {
+        case null                                                           => false
+        case _: MapValue.Pending[?, ?, ?] | _: MapValue.Refreshing[?, ?, ?] => true
+        case MapValue.Complete(_, _, _, _, timeToLive)                      => !hasExpired(timeToLive)
+      }
+    }
 
   override def entryStats(k: Key): UIO[Option[EntryStats]] =
     ZIO.succeed {
@@ -134,11 +140,11 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             trackHit()
             ensureMapSizeNotExceeded(key) *> scoped
           case complete @ MapValue.Complete(key, _, _, _, timeToLive) =>
-            trackHit()
             if (hasExpired(timeToLive)) {
               map.remove(k, value)
               ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(get(k))
             } else {
+              trackHit()
               ensureMapSizeNotExceeded(key).as(complete.toScoped)
             }
           case MapValue.Refreshing(promiseInProgress, complete @ MapValue.Complete(mapKey, _, _, _, ttl)) =>
