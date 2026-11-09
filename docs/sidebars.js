@@ -8,6 +8,7 @@ const sidebars = {
       items: [
         "lookup",
         "cache",
+        "scoped-cache",
         "cache-statistics",
         "entry-statistics"
       ]
