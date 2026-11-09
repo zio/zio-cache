@@ -280,13 +280,17 @@ object Cache {
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
             val interrupter = c.interruptOption.getOrElse(fiberId)
             promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
-            map.remove(key)
+            // Only remove the entry this lookup belongs to, not one added after an invalidation
+            var value = map.get(key)
+            while ((value ne null) && (value.key eq mapKey) && !map.remove(key, value)) value = map.get(key)
             exit
           case exit =>
-            val now        = clock.unsafe.instant()(Unsafe)
-            val entryStats = EntryStats(now)
+            val now       = clock.unsafe.instant()(Unsafe)
+            val completed = MapValue.Complete(mapKey, exit, EntryStats(now), now.plus(timeToLive(exit)))
 
-            map.put(key, MapValue.Complete(mapKey, exit, entryStats, now.plus(timeToLive(exit))))
+            // Only store the result if the entry was not invalidated or evicted while the lookup ran
+            var value = map.get(key)
+            while ((value ne null) && (value.key eq mapKey) && !map.replace(key, value, completed)) value = map.get(key)
             promise.unsafe.done(exit)(Unsafe)
             exit
         }
