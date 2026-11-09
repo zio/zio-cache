@@ -145,14 +145,14 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(get(k)))
             } else {
               trackHit()
-              ensureMapSizeNotExceeded(key).as(complete.toScoped)
+              ensureMapSizeNotExceeded(key).as(complete.toScoped(restore(get(k))))
             }
           case MapValue.Refreshing(promiseInProgress, complete @ MapValue.Complete(mapKey, _, _, _, ttl)) =>
             trackHit()
             if (hasExpired(ttl)) {
               ensureMapSizeNotExceeded(mapKey) *> promiseInProgress
             } else {
-              ensureMapSizeNotExceeded(mapKey).as(complete.toScoped)
+              ensureMapSizeNotExceeded(mapKey).as(complete.toScoped(restore(get(k))))
             }
         }
       // Acquiring the value cannot block, so it is not interrupted: an interruption while waiting for the lookup
@@ -242,8 +242,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               )
             val current  = map.get(key)
             val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
-            if (isStored) cleanMapValue(current).as(completedResult.toScoped)
-            else Exit.succeed(toScopedUncached(completedResult))
+            if (isStored) cleanMapValue(current).as(completedResult.toScoped(restore(get(key))))
+            else Exit.succeed(toScopedUncached(completedResult)(restore(get(key))))
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
             // Only undo the entry this lookup belongs to, not one added after an invalidation
             val current = map.get(key)
@@ -263,7 +263,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             val current  = map.get(key)
             val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
             val replaced = if (isStored) cleanMapValue(current) else Exit.unit
-            release(exit) *> replaced.as(completedResult.toScoped)
+            release(exit) *> replaced.as(completedResult.toScoped(restore(get(key))))
         }
     }
 
@@ -272,23 +272,25 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
    * it ran. Every fiber waiting for the lookup acquires the value, and the
    * cache releases its own share once the first one has.
    */
-  private def toScopedUncached(complete: MapValue.Complete[Key, Error, Value]): ZIO[Scope, Error, Value] = {
+  private def toScopedUncached(complete: MapValue.Complete[Key, Error, Value])(
+    ifReleased: => ZIO[Scope, Error, Value]
+  ): ZIO[Scope, Error, Value] = {
     val cacheShareReleased = new AtomicBoolean(false)
-    complete.toScoped.tap { _ =>
+    complete.toScoped(ifReleased).tap { _ =>
       val isFirst = cacheShareReleased.compareAndSet(false, true)
       if (isFirst) complete.releaseOwner else Exit.unit
     }
   }
 
   /**
-   * Undoes the entry of an interrupted lookup and returns whether it was
-   * undone. An interrupted refresh keeps the value it was refreshing.
+   * Undoes the entry of an interrupted lookup. An interrupted refresh keeps
+   * the value it was refreshing.
    */
-  private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Boolean =
+  private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Unit =
     value match {
-      case _: MapValue.Pending[?, ?, ?]     => map.remove(key, value)
-      case MapValue.Refreshing(_, complete) => map.replace(key, value, complete)
-      case _: MapValue.Complete[?, ?, ?]    => false
+      case _: MapValue.Pending[?, ?, ?]     => map.remove(key, value): Unit
+      case MapValue.Refreshing(_, complete) => map.replace(key, value, complete): Unit
+      case _: MapValue.Complete[?, ?, ?]    => ()
     }
 
   private def hasExpired(timeToLive: Instant) =
@@ -335,15 +337,30 @@ object ScopedCacheImplementation {
       entryStats: EntryStats,
       timeToLive: Instant
     ) extends MapValue[Key, Error, Value] {
-      def toScoped: ZIO[Scope, Error, Value] =
+
+      /**
+       * Acquires the value for the current scope, or runs `ifReleased` if its
+       * resource was already released by its last owner.
+       */
+      def toScoped[E1 >: Error, V1 >: Value](ifReleased: => ZIO[Scope, E1, V1]): ZIO[Scope, E1, V1] =
         exit.foldExit(
           cause => Exit.failCause(cause),
           { case (value, _) =>
-            ZIO.acquireRelease(ZIO.succeed(ownerCount.incrementAndGet()).as(value)) { _ =>
-              releaseOwner
+            ZIO.uninterruptible {
+              ZIO.suspendSucceed {
+                if (tryAcquireOwner()) ZIO.addFinalizer(releaseOwner).as(value) else ifReleased
+              }
             }
           }
         )
+
+      // A released resource cannot be used again, so there is no owner to add once the count reaches zero
+      private def tryAcquireOwner(): Boolean = {
+        var owners              = ownerCount.get
+        def lostRace(): Boolean = owners > 0 && !ownerCount.compareAndSet(owners, owners + 1)
+        while (lostRace()) owners = ownerCount.get
+        owners > 0
+      }
 
       def releaseOwner: UIO[Unit] =
         exit.foldExit(

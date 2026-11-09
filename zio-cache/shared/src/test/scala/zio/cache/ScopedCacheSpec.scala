@@ -1116,6 +1116,84 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                     }
         } yield result
       },
+      test("never gives a waiting fiber a released value when the entry is invalidated during the lookup") {
+        ZIO.foreach(List.range(0, 100))(_ => waiterSeesReleasedValue(invalidateAfterLookup = false)).map { results =>
+          assertTrue(!results.contains(true))
+        }
+      },
+      test("never gives a waiting fiber a released value when the entry is invalidated after the lookup") {
+        ZIO.foreach(List.range(0, 100))(_ => waiterSeesReleasedValue(invalidateAfterLookup = true)).map { results =>
+          assertTrue(!results.contains(true))
+        }
+      },
+      test("releases its resource if a refresh waiting for it is interrupted") {
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          started  <- Promise.make[Nothing, Unit]
+          gate     <- Promise.make[Nothing, Unit]
+          // The lookup cannot be interrupted, so the interruption arrives while the refresh waits for it
+          lookup = ScopedLookup((_: Int) => ZIO.uninterruptible(started.succeed(()) *> gate.await *> resource.managed))
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber       <- cache.refresh(1).fork
+                          _           <- started.await
+                          _           <- cache.invalidate(1)
+                          interrupted <- fiber.interrupt.fork
+                          _           <- gate.succeed(())
+                          _           <- interrupted.join
+                          cleaned     <- resource.assertAcquiredOnceAndCleaned
+                        } yield cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("can be interrupted while a refresh reloads an expired entry") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     calls
+                       .getAndUpdate(_ + 1)
+                       .flatMap(n => if (n == 0) ZIO.succeed(key) else started.succeed(()) *> ZIO.never)
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds).flatMap { cache =>
+                        for {
+                          _ <- ZIO.scoped(cache.get(1))
+                          // Expires between two runs of the background cleaner, which runs every second
+                          _     <- TestClock.adjust(10500.millis)
+                          fiber <- cache.refresh(1).fork
+                          _     <- started.await
+                          exit  <- fiber.interrupt.timeout(5.seconds).withClock(Clock.ClockLive)
+                        } yield assertTrue(exit.exists(_.isInterrupted))
+                      }
+                    }
+        } yield result
+      },
+      test("can be interrupted while reloading an expired entry") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     calls
+                       .getAndUpdate(_ + 1)
+                       .flatMap(n => if (n == 0) ZIO.succeed(key) else started.succeed(()) *> ZIO.never)
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds).flatMap { cache =>
+                        for {
+                          _ <- ZIO.scoped(cache.get(1))
+                          // Expires between two runs of the background cleaner, which runs every second
+                          _     <- TestClock.adjust(10500.millis)
+                          fiber <- ZIO.scoped(cache.get(1)).fork
+                          _     <- started.await
+                          exit  <- fiber.interrupt.timeout(5.seconds).withClock(Clock.ClockLive)
+                        } yield assertTrue(exit.exists(_.isInterrupted))
+                      }
+                    }
+        } yield result
+      },
       test("releases what it acquired when it is interrupted") {
         for {
           resource <- ObservableResourceForTest.make(1)
@@ -1491,6 +1569,36 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           }
       } yield notUsedReleasers
   }
+
+  /**
+   * Runs a lookup that a second fiber waits for, invalidates the entry during
+   * or after the lookup, and returns whether the waiting fiber was given a
+   * value whose resource was already released.
+   */
+  private def waiterSeesReleasedValue(invalidateAfterLookup: Boolean): UIO[Boolean] =
+    for {
+      started <- Promise.make[Nothing, Unit]
+      gate    <- Promise.make[Nothing, Unit]
+      // Each value is the flag that its own release sets
+      lookup = ScopedLookup { (_: Int) =>
+                 started.succeed(()) *> gate.await *> ZIO.acquireRelease(Ref.make(false))(_.set(true))
+               }
+      result <- ZIO.scoped {
+                  ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                    for {
+                      runner <- ZIO.scoped(cache.get(1)).fork
+                      _      <- started.await
+                      waiter <- ZIO.scoped(cache.get(1).flatMap(_.get)).fork
+                      _      <- waiter.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                      _      <- cache.invalidate(1).unless(invalidateAfterLookup)
+                      _      <- gate.succeed(())
+                      _      <- runner.join
+                      _      <- cache.invalidate(1).when(invalidateAfterLookup)
+                      seen   <- waiter.join
+                    } yield seen
+                  }
+                }
+    } yield result
 
   private def keyCount(cache: ScopedCache[?, ?, ?]): Int =
     cache.asInstanceOf[ScopedCacheImplementation[?, ?, ?, ?]].keyCount
