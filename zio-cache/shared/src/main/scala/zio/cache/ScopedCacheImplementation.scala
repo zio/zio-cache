@@ -142,7 +142,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
           case complete @ MapValue.Complete(key, _, _, _, timeToLive) =>
             if (hasExpired(timeToLive)) {
               map.remove(k, value)
-              ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(get(k))
+              ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(get(k)))
             } else {
               trackHit()
               ensureMapSizeNotExceeded(key).as(complete.toScoped)
@@ -155,7 +155,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               ensureMapSizeNotExceeded(mapKey).as(complete.toScoped)
             }
         }
-      }.flatMap(restore(_))
+      // Acquiring the value cannot block, so it is not interrupted: an interruption while waiting for the lookup
+      // then happens after the value is acquired, and the caller's scope releases it
+      }.flatten
     }
 
   override def refresh(k: Key): IO[Error, Unit] =
@@ -178,17 +180,17 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             scopedEffect
           case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
             if (hasExpired(ttl)) {
-              ZIO.succeed(get(k))
+              ZIO.succeed(restore(get(k)))
             } else {
               if (map.replace(k, completeResult, MapValue.Refreshing(scoped, completeResult))) {
                 scoped
               } else {
-                ZIO.succeed(get(k))
+                ZIO.succeed(restore(get(k)))
               }
             }
           case MapValue.Refreshing(scoped, _) => scoped
         }
-        finalScoped.flatMap(s => restore(ZIO.scoped(s.unit)))
+        finalScoped.flatMap(s => ZIO.scoped(s.unit))
       }
     }
 
@@ -238,11 +240,15 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
                 entryStats = EntryStats(now),
                 timeToLive = expiredAt
               )
-            val previousValue = map.put(key, completedResult)
-            Exit.succeed(cleanMapValue(previousValue) *> completedResult.toScoped)
+            val current  = map.get(key)
+            val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
+            if (isStored) cleanMapValue(current).as(completedResult.toScoped)
+            else Exit.succeed(toScopedUncached(completedResult))
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
-            map.remove(key)
-            Exit.succeed(exit)
+            // Only undo the entry this lookup belongs to, not one added after an invalidation
+            val current = map.get(key)
+            if (isEntryOf(mapKey, current)) undoLookup(key, current)
+            release(exit).as(exit)
           case exit: Exit.Failure[Error] =>
             val now       = clock.unsafe.instant()(Unsafe)
             val expiredAt = now.plus(timeToLive(exit))
@@ -254,9 +260,35 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
                 entryStats = EntryStats(now),
                 timeToLive = expiredAt
               )
-            val previousValue = map.put(key, completedResult)
-            release(exit).as(cleanMapValue(previousValue) *> completedResult.toScoped)
+            val current  = map.get(key)
+            val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
+            val replaced = if (isStored) cleanMapValue(current) else Exit.unit
+            release(exit) *> replaced.as(completedResult.toScoped)
         }
+    }
+
+  /**
+   * Returns the value of a lookup whose entry was invalidated or evicted while
+   * it ran. Every fiber waiting for the lookup acquires the value, and the
+   * cache releases its own share once the first one has.
+   */
+  private def toScopedUncached(complete: MapValue.Complete[Key, Error, Value]): ZIO[Scope, Error, Value] = {
+    val cacheShareReleased = new AtomicBoolean(false)
+    complete.toScoped.tap { _ =>
+      val isFirst = cacheShareReleased.compareAndSet(false, true)
+      if (isFirst) complete.releaseOwner else Exit.unit
+    }
+  }
+
+  /**
+   * Undoes the entry of an interrupted lookup and returns whether it was
+   * undone. An interrupted refresh keeps the value it was refreshing.
+   */
+  private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Boolean =
+    value match {
+      case _: MapValue.Pending[?, ?, ?]     => map.remove(key, value)
+      case MapValue.Refreshing(_, complete) => map.replace(key, value, complete)
+      case _: MapValue.Complete[?, ?, ?]    => false
     }
 
   private def hasExpired(timeToLive: Instant) =
