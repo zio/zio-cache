@@ -21,6 +21,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   import cacheState._
 
   private def trackAccess(key: MapKey[Key]): Array[MapValue[Key, Error, Value]] = {
+    def tryStartProcessingAccesses(): Boolean =
+      !accesses.isEmpty() && updating.compareAndSet(false, true)
+
     val cleanedKey = scala.collection.mutable.ArrayBuilder.make[MapValue[Key, Error, Value]]
     accesses.offer(key)
     // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again
@@ -76,9 +79,6 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
 
   private def isEntryOf(key: MapKey[Key], value: MapValue[Key, Error, Value]): Boolean =
     (value ne null) && (value.key eq key)
-
-  private def tryStartProcessingAccesses(): Boolean =
-    !accesses.isEmpty() && updating.compareAndSet(false, true)
 
   private def trackHit(): Unit =
     hits.increment()
