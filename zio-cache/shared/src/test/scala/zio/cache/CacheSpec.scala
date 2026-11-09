@@ -242,7 +242,24 @@ object CacheSpec extends ZIOSpecDefault {
           size   <- cache.size
           hasOne <- cache.contains(one)
         } yield assertTrue(size == 1, !hasOne, keyCount(cache) == 1)
-      }
+      },
+      test("get completes when it is called during an eviction on the same thread") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          cache   <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          one      = new HookKey(1)
+          _       <- cache.get(one) *> cache.get(new HookKey(2))
+          // Eviction hashes `one` to read its entry: call `get` from there, while the eviction holds the cache
+          _ <- ZIO.succeed(one.onHash(1) {
+                 Unsafe.unsafe(implicit unsafe =>
+                   runtime.unsafe.run(cache.get(new HookKey(4))).getOrThrowFiberFailure()
+                 )
+               })
+          // Disconnected so that the timeout fires even if the nested `get` spins without yielding
+          completed <- cache.get(new HookKey(3)).disconnect.timeout(10.seconds).map(_.isDefined)
+          size      <- cache.size
+        } yield assertTrue(completed, size == 2)
+      } @@ TestAspect.withLiveClock
     ),
     suite("lookup in progress")(
       test("does not store its result if the entry is invalidated") {
