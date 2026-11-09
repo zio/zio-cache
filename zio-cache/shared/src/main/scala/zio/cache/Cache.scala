@@ -297,14 +297,15 @@ object Cache {
         }
 
     /**
-     * Undoes the entry of an interrupted lookup and returns whether it was
-     * undone. An interrupted refresh keeps the value it was refreshing.
+     * Undoes the entry of an interrupted lookup. An interrupted refresh keeps
+     * the value it was refreshing.
      */
-    private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Boolean =
+    private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Unit =
       value match {
-        case _: MapValue.Pending[?, ?, ?]     => map.remove(key, value)
-        case MapValue.Refreshing(_, complete) => map.replace(key, value, complete)
-        case _: MapValue.Complete[?, ?, ?]    => false
+        case _: MapValue.Pending[?, ?, ?]     => map.remove(key, value): Unit
+        case MapValue.Refreshing(_, complete) => map.replace(key, value, complete): Unit
+        // Only the lookup stores a `Complete` with its key, so there is none while it runs
+        case _: MapValue.Complete[?, ?, ?] => ()
       }
 
     private def newPromise() =

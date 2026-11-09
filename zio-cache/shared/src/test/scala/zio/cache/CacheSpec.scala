@@ -282,6 +282,26 @@ object CacheSpec extends ZIOSpecDefault {
           one   <- cache.contains(1)
         } yield assertTrue(size == 1, !one)
       },
+      test("runs the lookup again after it is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          fiber <- cache.get(1).fork
+          _     <- started.await
+          _     <- fiber.interrupt
+          value <- cache.get(1)
+          n     <- calls.get
+        } yield assertTrue(value == 1, n == 2)
+      },
       test("does not remove a newer entry when interrupted") {
         for {
           calls   <- Ref.make(0)
