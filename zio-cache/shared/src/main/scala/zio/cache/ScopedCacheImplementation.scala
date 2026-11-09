@@ -35,17 +35,16 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       }
       var size = map.size
       // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
-      if (keys.size > 2 * size) keys.retain(isLive)
+      val tooManyStaleKeys = keys.size > 2 * size
+      if (tooManyStaleKeys) keys.retain(isLive)
       loop = size > capacity
       while (loop) {
         val key = keys.remove()
         if (key ne null) {
-          // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so retry the remove
-          var value = map.get(key.value)
-          while ((value ne null) && (value.key eq key) && !map.remove(key.value, value)) value = map.get(key.value)
-          if ((value ne null) && (value.key eq key)) {
+          val removed = removeEntryOf(key)
+          if (removed ne null) {
             size -= 1
-            cleanedKey += value
+            cleanedKey += removed
             loop = size > capacity
           }
         } else {
@@ -57,10 +56,23 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     cleanedKey.result()
   }
 
-  private def isLive(key: MapKey[Key]): Boolean = {
-    val value = map.get(key.value)
-    (value ne null) && (value.key eq key)
+  /**
+   * Removes the entry tracked by `key`, if the map still holds it, and returns
+   * the removed entry, or `null` if there was none.
+   */
+  private def removeEntryOf(key: MapKey[Key]): MapValue[Key, Error, Value] = {
+    var value = map.get(key.value)
+    // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so the remove is retried
+    def changedBeforeRemove(): Boolean = isEntryOf(key, value) && !map.remove(key.value, value)
+    while (changedBeforeRemove()) value = map.get(key.value)
+    if (isEntryOf(key, value)) value else null
   }
+
+  private def isLive(key: MapKey[Key]): Boolean =
+    isEntryOf(key, map.get(key.value))
+
+  private def isEntryOf(key: MapKey[Key], value: MapValue[Key, Error, Value]): Boolean =
+    (value ne null) && (value.key eq key)
 
   private def trackHit(): Unit =
     hits.increment()
@@ -143,8 +155,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       val current = map.get(k)
       // A refresh keeps the key of the entry it replaces
       val newKey = current match {
-        case MapValue.Complete(key, _, _, _, _) => key
-        case _                                  => new MapKey[Key](k)
+        case MapValue.Complete(key, _, _, _, _)                                    => key
+        case null | _: MapValue.Pending[?, ?, ?] | _: MapValue.Refreshing[?, ?, ?] => new MapKey[Key](k)
       }
       lookupValueOf(k, newKey).memoize.flatMap { scoped =>
         var value = current

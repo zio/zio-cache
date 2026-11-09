@@ -3,7 +3,7 @@ package zio.cache
 import zio.Exit.{Failure, Success}
 import zio.test.Assertion._
 import zio.test._
-import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, ZEnvironment, ZIO, durationInt}
+import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, Unsafe, ZEnvironment, ZIO, durationInt}
 
 object ScopedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment with Scope, Any] = suite("SharedScoped")(
@@ -935,6 +935,24 @@ object ScopedCacheSpec extends ZIOSpecDefault {
               two   <- cache.contains(2)
               three <- cache.contains(3)
             } yield assertTrue(one, !two, three)
+          }
+        }
+      },
+      test("evicts an entry that changes state while it is being evicted") {
+        ZIO.scoped {
+          ScopedCache.make(1, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap { cache =>
+            for {
+              runtime <- ZIO.runtime[Any]
+              one      = new HookKey(1)
+              _       <- ZIO.scoped(cache.get(one))
+              // Eviction hashes `one` to read its entry, then again to remove it: refresh the entry in between
+              _ <- ZIO.succeed(one.onHash(2) {
+                     Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.refresh(one)).getOrThrowFiberFailure())
+                   })
+              _      <- ZIO.scoped(cache.get(new HookKey(2)))
+              size   <- cache.size
+              hasOne <- cache.contains(one)
+            } yield assertTrue(size == 1, !hasOne, keyCount(cache) == 1)
           }
         }
       }

@@ -224,6 +224,23 @@ object CacheSpec extends ZIOSpecDefault {
           one   <- cache.contains(1)
           two   <- cache.contains(2)
         } yield assertTrue(!one, two)
+      },
+      test("evicts an entry that changes state while it is being evicted") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          calls   <- Ref.make(0)
+          // A new value on every call, so the refreshed entry is not equal to the one being evicted
+          cache <- Cache.make(1, Duration.Infinity, Lookup((_: HookKey) => calls.updateAndGet(_ + 1)))
+          one    = new HookKey(1)
+          _     <- cache.get(one)
+          // Eviction hashes `one` to read its entry, then again to remove it: refresh the entry in between
+          _ <- ZIO.succeed(one.onHash(2) {
+                 Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.refresh(one)).getOrThrowFiberFailure())
+               })
+          _      <- cache.get(new HookKey(2))
+          size   <- cache.size
+          hasOne <- cache.contains(one)
+        } yield assertTrue(size == 1, !hasOne, keyCount(cache) == 1)
       }
     )
   )

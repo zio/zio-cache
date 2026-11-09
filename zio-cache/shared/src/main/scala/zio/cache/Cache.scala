@@ -311,15 +311,13 @@ object Cache {
           }
           var size = map.size
           // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
-          if (keys.size > 2 * size) keys.retain(isLive)
+          val tooManyStaleKeys = keys.size > 2 * size
+          if (tooManyStaleKeys) keys.retain(isLive)
           loop = size > capacity
           while (loop) {
             val key = keys.remove()
             if (key ne null) {
-              // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so retry the remove
-              var value = map.get(key.value)
-              while ((value ne null) && (value.key eq key) && !map.remove(key.value, value)) value = map.get(key.value)
-              if ((value ne null) && (value.key eq key)) {
+              if (removeEntryOf(key)) {
                 size -= 1
                 loop = size > capacity
               }
@@ -338,10 +336,23 @@ object Cache {
       loop()
     }
 
-    private def isLive(key: MapKey[Key]): Boolean = {
-      val value = map.get(key.value)
-      (value ne null) && (value.key eq key)
+    /**
+     * Removes the entry tracked by `key`, if the map still holds it, and
+     * returns whether it was removed.
+     */
+    private def removeEntryOf(key: MapKey[Key]): Boolean = {
+      var value = map.get(key.value)
+      // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so the remove is retried
+      def changedBeforeRemove(): Boolean = isEntryOf(key, value) && !map.remove(key.value, value)
+      while (changedBeforeRemove()) value = map.get(key.value)
+      isEntryOf(key, value)
     }
+
+    private def isLive(key: MapKey[Key]): Boolean =
+      isEntryOf(key, map.get(key.value))
+
+    private def isEntryOf(key: MapKey[Key], value: MapValue[Key, Error, Value]): Boolean =
+      (value ne null) && (value.key eq key)
 
     private def trackHit(): Unit =
       hits.increment()
