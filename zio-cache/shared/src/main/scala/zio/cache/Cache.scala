@@ -310,14 +310,16 @@ object Cache {
             }
           }
           var size = map.size
-          // Keys of entries that were reloaded, invalidated or evicted stay in the set until they are dropped here
+          // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
           if (keys.size > 2 * size) keys.retain(isLive)
           loop = size > capacity
           while (loop) {
             val key = keys.remove()
             if (key ne null) {
-              val value = map.get(key.value)
-              if ((value ne null) && (value.key eq key) && map.remove(key.value, value)) {
+              // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so retry the remove
+              var value = map.get(key.value)
+              while ((value ne null) && (value.key eq key) && !map.remove(key.value, value)) value = map.get(key.value)
+              if ((value ne null) && (value.key eq key)) {
                 size -= 1
                 loop = size > capacity
               }

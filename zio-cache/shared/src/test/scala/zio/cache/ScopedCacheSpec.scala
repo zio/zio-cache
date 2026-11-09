@@ -908,6 +908,15 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           }
         }
       },
+      test("does not grow when an entry is invalidated and reloaded") {
+        ZIO.scoped {
+          ScopedCache.make(10, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            (ZIO.scoped(cache.get(42)) *> cache.invalidate(42)).repeatN(99).as {
+              assertTrue(keyCount(cache) <= 2)
+            }
+          }
+        }
+      },
       test("does not grow when an entry is refreshed") {
         ZIO.scoped {
           ScopedCache.make(10, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
