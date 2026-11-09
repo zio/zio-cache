@@ -146,7 +146,7 @@ object Cache {
       }
     }
 
-  private final class CacheImplementation[In, Key, Environment, Error, Value](
+  private[cache] final class CacheImplementation[In, Key, Environment, Error, Value](
     capacity: Int,
     lookup: Lookup[In, Environment, Error, Value],
     timeToLive: Exit[Error, Value] => Duration,
@@ -200,7 +200,7 @@ object Cache {
         case null =>
           trackAccess(key)
           trackMiss()
-          lookupValueOf(in, k, promise)
+          lookupValueOf(in, k, key, promise)
         case MapValue.Pending(key, promise) =>
           trackAccess(key)
           trackHit()
@@ -230,15 +230,18 @@ object Cache {
 
     override def refresh(in: In): IO[Error, Unit] =
       ZIO.uninterruptibleMask { implicit restore =>
-        val k       = keyBy(in)
-        val promise = newPromise()
-        var value   = map.get(k)
+        val k                = keyBy(in)
+        val promise          = newPromise()
+        var key: MapKey[Key] = null
+        var value            = map.get(k)
         if (value eq null) {
-          value = map.putIfAbsent(k, MapValue.Pending(new MapKey(k), promise))
+          key = new MapKey(k)
+          value = map.putIfAbsent(k, MapValue.Pending(key, promise))
         }
         (value match {
           case null =>
-            lookupValueOf(in, k, promise)
+            trackAccess(key)
+            lookupValueOf(in, k, key, promise)
           case MapValue.Pending(_, promiseInProgress) =>
             restore(promiseInProgress.await)
           case completedResult @ MapValue.Complete(_, _, _, ttl) =>
@@ -247,7 +250,7 @@ object Cache {
               getUnsafe(in)
             } else {
               // Only trigger the lookup if we're still the current value, `completedResult`
-              lookupValueOf(in, k, promise).whenDiscard {
+              lookupValueOf(in, k, completedResult.key, promise).whenDiscard {
                 map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
               }
             }
@@ -265,7 +268,10 @@ object Cache {
     def size(implicit trace: Trace): UIO[Int] =
       ZIO.succeed(map.size)
 
-    private def lookupValueOf(in: In, key: Key, promise: Promise[Error, Value])(implicit
+    private[cache] def keyCount: Int =
+      keys.size
+
+    private def lookupValueOf(in: In, key: Key, mapKey: MapKey[Key], promise: Promise[Error, Value])(implicit
       restore: ZIO.InterruptibilityRestorer
     ): IO[Error, Value] =
       restore(lookup(in))
@@ -280,7 +286,7 @@ object Cache {
             val now        = clock.unsafe.instant()(Unsafe)
             val entryStats = EntryStats(now)
 
-            map.put(key, MapValue.Complete(new MapKey(key), exit, entryStats, now.plus(timeToLive(exit))))
+            map.put(key, MapValue.Complete(mapKey, exit, entryStats, now.plus(timeToLive(exit))))
             promise.unsafe.done(exit)(Unsafe)
             exit
         }
@@ -304,11 +310,14 @@ object Cache {
             }
           }
           var size = map.size
+          // Keys of entries that were reloaded, invalidated or evicted stay in the set until they are dropped here
+          if (keys.size > 2 * size) keys.retain(isLive)
           loop = size > capacity
           while (loop) {
             val key = keys.remove()
             if (key ne null) {
-              if (map.remove(key.value) ne null) {
+              val value = map.get(key.value)
+              if ((value ne null) && (value.key eq key) && map.remove(key.value, value)) {
                 size -= 1
                 loop = size > capacity
               }
@@ -327,6 +336,11 @@ object Cache {
       loop()
     }
 
+    private def isLive(key: MapKey[Key]): Boolean = {
+      val value = map.get(key.value)
+      (value ne null) && (value.key eq key)
+    }
+
     private def trackHit(): Unit =
       hits.increment()
 
@@ -340,7 +354,9 @@ object Cache {
    * lookup function, when it is available, or `Complete` with an `Exit` value
    * that contains the result of computing the lookup function.
    */
-  private sealed trait MapValue[Key, Error, Value] extends Product with Serializable
+  private sealed trait MapValue[Key, Error, Value] extends Product with Serializable {
+    def key: MapKey[Key]
+  }
 
   private object MapValue {
     final case class Pending[Key, Error, Value](
@@ -358,7 +374,9 @@ object Cache {
     final case class Refreshing[Key, Error, Value](
       promise: Promise[Error, Value],
       complete: Complete[Key, Error, Value]
-    ) extends MapValue[Key, Error, Value]
+    ) extends MapValue[Key, Error, Value] {
+      def key: MapKey[Key] = complete.key
+    }
   }
 
   /**

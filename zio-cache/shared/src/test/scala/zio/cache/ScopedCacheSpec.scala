@@ -898,6 +898,38 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         }
       }
     ),
+    suite("key tracking")(
+      test("does not grow when an entry expires and is reloaded") {
+        ZIO.scoped {
+          ScopedCache.make(10, 1.second, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            (ZIO.scoped(cache.get(42)) *> TestClock.adjust(2.seconds)).repeatN(99).as {
+              assertTrue(keyCount(cache) <= 2)
+            }
+          }
+        }
+      },
+      test("does not grow when an entry is refreshed") {
+        ZIO.scoped {
+          ScopedCache.make(10, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            (cache.refresh(42) *> ZIO.scoped(cache.get(42))).repeatN(99).as {
+              assertTrue(keyCount(cache) == 1)
+            }
+          }
+        }
+      },
+      test("evicts the least recently used entry") {
+        ZIO.scoped {
+          ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            for {
+              _     <- ZIO.foreachDiscard(List(1, 2, 1, 3))(key => ZIO.scoped(cache.get(key)))
+              one   <- cache.contains(1)
+              two   <- cache.contains(2)
+              three <- cache.contains(3)
+            } yield assertTrue(one, !two, three)
+          }
+        }
+      }
+    ),
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
       for {
@@ -1174,6 +1206,9 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           }
       } yield notUsedReleasers
   }
+
+  private def keyCount(cache: ScopedCache[?, ?, ?]): Int =
+    cache.asInstanceOf[ScopedCacheImplementation[?, ?, ?, ?]].keyCount
 
   def assertAllM(results: Iterable[UIO[TestResult]]): UIO[TestResult] =
     ZIO.foldLeft(results)(assertCompletes)((l, r) => r.map(l && _))

@@ -34,14 +34,16 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
         }
       }
       var size = map.size
+      // Keys of entries that were reloaded, invalidated or evicted stay in the set until they are dropped here
+      if (keys.size > 2 * size) keys.retain(isLive)
       loop = size > capacity
       while (loop) {
         val key = keys.remove()
         if (key ne null) {
-          val removed = map.remove(key.value)
-          if (removed ne null) {
+          val value = map.get(key.value)
+          if ((value ne null) && (value.key eq key) && map.remove(key.value, value)) {
             size -= 1
-            cleanedKey += removed
+            cleanedKey += value
             loop = size > capacity
           }
         } else {
@@ -51,6 +53,11 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       updating.set(false)
     }
     cleanedKey.result()
+  }
+
+  private def isLive(key: MapKey[Key]): Boolean = {
+    val value = map.get(key.value)
+    (value ne null) && (value.key eq key)
   }
 
   private def trackHit(): Unit =
@@ -97,17 +104,16 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
 
   override def get(k: Key): ZIO[Scope, Error, Value] =
     ZIO.uninterruptibleMask { implicit restore =>
-      lookupValueOf(k).memoize.flatMap { lookupValue =>
-        var key: MapKey[Key] = null
-        var value            = map.get(k)
+      val newKey = new MapKey(k)
+      lookupValueOf(k, newKey).memoize.flatMap { lookupValue =>
+        var value = map.get(k)
         if (value eq null) {
-          key = new MapKey(k)
-          value = map.putIfAbsent(k, MapValue.Pending(key, lookupValue))
+          value = map.putIfAbsent(k, MapValue.Pending(newKey, lookupValue))
         }
         value match {
           case null =>
             trackMiss()
-            ensureMapSizeNotExceeded(key) *> lookupValue
+            ensureMapSizeNotExceeded(newKey) *> lookupValue
           case MapValue.Pending(key, scoped) =>
             trackHit()
             ensureMapSizeNotExceeded(key) *> scoped
@@ -132,11 +138,15 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
 
   override def refresh(k: Key): IO[Error, Unit] =
     ZIO.uninterruptibleMask { implicit restore =>
-      lookupValueOf(k).memoize.flatMap { scoped =>
-        var value               = map.get(k)
-        var newKey: MapKey[Key] = null
+      val current = map.get(k)
+      // A refresh keeps the key of the entry it replaces
+      val newKey = current match {
+        case MapValue.Complete(key, _, _, _, _) => key
+        case _                                  => new MapKey[Key](k)
+      }
+      lookupValueOf(k, newKey).memoize.flatMap { scoped =>
+        var value = current
         if (value eq null) {
-          newKey = new MapKey[Key](k)
           value = map.putIfAbsent(k, MapValue.Pending(newKey, scoped))
         }
         val finalScoped = value match {
@@ -174,6 +184,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   override def size: UIO[Int] =
     ZIO.succeed(map.size)
 
+  private[cache] def keyCount: Int =
+    keys.size
+
   private def cleanMapValue(mapValue: MapValue[Key, Error, Value]): UIO[Unit] =
     mapValue match {
       case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
@@ -181,7 +194,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       case _                                           => Exit.unit
     }
 
-  private def lookupValueOf(key: Key)(implicit restore: ZIO.InterruptibilityRestorer): UIO[ZIO[Scope, Error, Value]] =
+  private def lookupValueOf(key: Key, mapKey: MapKey[Key])(implicit
+    restore: ZIO.InterruptibilityRestorer
+  ): UIO[ZIO[Scope, Error, Value]] =
     ZIO.suspendSucceed {
       val scope   = Scope.unsafe.make(Unsafe)
       val release = scope.close(_)
@@ -195,7 +210,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               Exit.succeed(value -> release)
             val completedResult = MapValue
               .Complete(
-                key = new MapKey(key),
+                key = mapKey,
                 exit = exitWithReleaser,
                 ownerCount = new AtomicInteger(1),
                 entryStats = EntryStats(now),
@@ -211,7 +226,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             val expiredAt = now.plus(timeToLive(exit))
             val completedResult =
               MapValue.Complete(
-                key = new MapKey(key),
+                key = mapKey,
                 exit = exit,
                 ownerCount = new AtomicInteger(0),
                 entryStats = EntryStats(now),
@@ -249,7 +264,9 @@ object ScopedCacheImplementation {
    * lookup function, when it is available, or `Complete` with an `Exit` value
    * that contains the result of computing the lookup function.
    */
-  private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable
+  private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable {
+    def key: MapKey[Key]
+  }
 
   private object MapValue {
     final case class Pending[Key, Error, Value](
@@ -288,7 +305,9 @@ object ScopedCacheImplementation {
     final case class Refreshing[Key, Error, Value](
       scopedEffect: UIO[ZIO[Scope, Error, Value]],
       complete: Complete[Key, Error, Value]
-    ) extends MapValue[Key, Error, Value]
+    ) extends MapValue[Key, Error, Value] {
+      def key: MapKey[Key] = complete.key
+    }
   }
 
   /**

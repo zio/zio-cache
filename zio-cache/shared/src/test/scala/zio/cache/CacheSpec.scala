@@ -188,6 +188,46 @@ object CacheSpec extends ZIOSpecDefault {
           _        <- promise.succeed(42)
         } yield assertTrue(contains)
       }
+    ),
+    suite("key tracking")(
+      test("does not grow when an entry expires and is reloaded") {
+        for {
+          cache <- Cache.make(10, 1.second, Lookup(identity))
+          _     <- (cache.get(42) *> TestClock.adjust(2.seconds)).repeatN(99)
+        } yield assertTrue(keyCount(cache) <= 2)
+      },
+      test("does not grow when an entry is invalidated and reloaded") {
+        for {
+          cache <- Cache.make(10, Duration.Infinity, Lookup(identity))
+          _     <- (cache.get(42) *> cache.invalidate(42)).repeatN(99)
+        } yield assertTrue(keyCount(cache) <= 2)
+      },
+      test("does not grow when an entry is refreshed") {
+        for {
+          cache <- Cache.make(10, Duration.Infinity, Lookup(identity))
+          _     <- (cache.refresh(42) *> cache.get(42)).repeatN(99)
+        } yield assertTrue(keyCount(cache) == 1)
+      },
+      test("evicts the least recently used entry") {
+        for {
+          cache <- Cache.make(2, Duration.Infinity, Lookup(identity))
+          _     <- cache.get(1) *> cache.get(2) *> cache.get(1) *> cache.get(3)
+          one   <- cache.contains(1)
+          two   <- cache.contains(2)
+          three <- cache.contains(3)
+        } yield assertTrue(one, !two, three)
+      },
+      test("evicts an entry added by refresh") {
+        for {
+          cache <- Cache.make(1, Duration.Infinity, Lookup(identity))
+          _     <- cache.refresh(1) *> cache.get(2)
+          one   <- cache.contains(1)
+          two   <- cache.contains(2)
+        } yield assertTrue(!one, two)
+      }
     )
   )
+
+  private def keyCount(cache: Cache[?, ?, ?]): Int =
+    cache.asInstanceOf[Cache.CacheImplementation[?, ?, ?, ?, ?]].keyCount
 }
