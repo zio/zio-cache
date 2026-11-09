@@ -45,9 +45,46 @@ Note that the size of the cache may slightly exceed the specified capacity betwe
 
 ## Time To Live (TTL)
 
-A cache also allows specifying a time to live. The cache guarantees that no value will be returned from the cache if its age is greater than or equal to the specified time to live.
+A cache also allows specifying a time to live. The cache guarantees that no value will be returned from the cache if its age is greater than the specified time to live.
 
 The age is calculated based on the interval between when the value was loaded in the cache and when it is accessed.
+
+The `Cache.make` constructor applies the same time to live to every value. To choose the time to live from the result of the lookup function, use `Cache.makeWith`. Its time to live function receives the `Exit` of the lookup, so a failure can expire sooner than a success:
+
+```scala mdoc:silent:reset
+import zio._
+import zio.cache.{Cache, Lookup}
+
+def loadProfile(userId: String): IO[String, Int] =
+  if (userId.isEmpty) ZIO.fail("Empty user id") else ZIO.succeed(userId.length)
+
+val profiles: UIO[Cache[String, String, Int]] =
+  Cache.makeWith(capacity = 100, lookup = Lookup(loadProfile))(exit =>
+    if (exit.isSuccess) 10.minutes else 5.seconds
+  )
+```
+
+## Custom Keys
+
+By default, the key of a cache entry is the input of the lookup function. The `Cache.makeWithKey` constructor accepts a `keyBy` function that converts each input into the key stored in the cache. Use it when the input is large and only a part of it identifies the value:
+
+```scala mdoc:compile-only
+import zio._
+import zio.cache.{Cache, Lookup}
+
+final case class Request(id: String, payload: Array[Byte])
+
+def process(request: Request): IO[Nothing, Int] =
+  ZIO.succeed(request.payload.length)
+
+val requests: UIO[Cache[Request, Nothing, Int]] =
+  Cache.makeWithKey(capacity = 100, lookup = Lookup(process))(
+    timeToLive = _ => 1.minute,
+    keyBy = (request: Request) => request.id
+  )
+```
+
+The `keyBy` function only changes the key that the cache stores. The lookup function still receives the full input, so two inputs with the same key share the cached value.
 
 ## Operators
 
