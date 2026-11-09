@@ -356,11 +356,13 @@ object ScopedCacheImplementation {
 
       // A released resource cannot be used again, so there is no owner to add once the count reaches zero
       private def tryAcquireOwner(): Boolean = {
-        var owners              = ownerCount.get
-        def lostRace(): Boolean = owners > 0 && !ownerCount.compareAndSet(owners, owners + 1)
-        while (lostRace()) owners = ownerCount.get
+        var owners = ownerCount.get
+        while (lostAcquireRace(owners)) owners = ownerCount.get
         owners > 0
       }
+
+      private def lostAcquireRace(owners: Int): Boolean =
+        owners > 0 && !ownerCount.compareAndSet(owners, owners + 1)
 
       def releaseOwner: UIO[Unit] =
         exit.foldExit(
