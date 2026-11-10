@@ -169,28 +169,29 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
         case null | _: MapValue.Pending[?, ?, ?] | _: MapValue.Refreshing[?, ?, ?] => new MapKey[Key](k)
       }
       lookupValueOf(k, newKey).memoize.flatMap { scoped =>
-        var value = current
-        if (value eq null) {
-          value = map.putIfAbsent(k, MapValue.Pending(newKey, scoped))
-        }
-        val finalScoped = value match {
-          case null =>
-            ensureMapSizeNotExceeded(newKey) *> scoped
-          case MapValue.Pending(_, scopedEffect) =>
-            scopedEffect
-          case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
-            if (hasExpired(ttl)) {
-              ZIO.succeed(restore(get(k)))
-            } else {
-              if (map.replace(k, completeResult, MapValue.Refreshing(scoped, completeResult))) {
-                scoped
-              } else {
+        // Another fiber can store an entry after `map.get`: its lookup has another key, so start again from it
+        val lostInsertRace = (current eq null) && (map.putIfAbsent(k, MapValue.Pending(newKey, scoped)) ne null)
+        if (lostInsertRace) restore(refresh(k))
+        else {
+          val finalScoped = current match {
+            case null =>
+              ensureMapSizeNotExceeded(newKey) *> scoped
+            case MapValue.Pending(_, scopedEffect) =>
+              scopedEffect
+            case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
+              if (hasExpired(ttl)) {
                 ZIO.succeed(restore(get(k)))
+              } else {
+                if (map.replace(k, completeResult, MapValue.Refreshing(scoped, completeResult))) {
+                  scoped
+                } else {
+                  ZIO.succeed(restore(get(k)))
+                }
               }
-            }
-          case MapValue.Refreshing(scoped, _) => scoped
+            case MapValue.Refreshing(scoped, _) => scoped
+          }
+          finalScoped.flatMap(s => ZIO.scoped(s.unit))
         }
-        finalScoped.flatMap(s => ZIO.scoped(s.unit))
       }
     }
 

@@ -548,7 +548,31 @@ object ScopedCacheSpec extends ZIOSpecDefault {
               }
           } yield testResult
         }
-      }
+      },
+      test("stores its value when a get stores the entry first") {
+        for {
+          calls <- Ref.make(0)
+          result <- ZIO.scoped {
+                      ScopedCache
+                        .make(100, Duration.Infinity, ScopedLookup((_: HookKey) => calls.updateAndGet(_ + 1)))
+                        .flatMap { cache =>
+                          for {
+                            runtime <- ZIO.runtime[Any]
+                            one      = new HookKey(1)
+                            // `refresh` hashes `one` to read its entry, then again to insert one: `get` stores it in between
+                            _ <- ZIO.succeed(one.onHash(2) {
+                                   Unsafe.unsafe { implicit unsafe =>
+                                     runtime.unsafe.run(ZIO.scoped(cache.get(new HookKey(1)))).getOrThrowFiberFailure()
+                                   }
+                                 })
+                            _     <- cache.refresh(one)
+                            value <- ZIO.scoped(cache.get(one))
+                          } yield assertTrue(value == 2)
+                        }
+                    }
+        } yield result
+        // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+      } @@ TestAspect.exceptJS
     ),
     suite("expiration")(
       suite("get")(
