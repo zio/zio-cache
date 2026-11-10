@@ -31,7 +31,7 @@ The most fundamental operator on a cache is `get`, which either returns the valu
 
 The cache is guaranteed to be safe for concurrent access. In addition, getting a value from the cache is efficient under concurrency.
 
-If two concurrent processes attempt to get the same value and it does not exist in the cache, the value will be computed once and provided to both concurent processes as soon as it is available. The concurrent processes will semantically block for the value to become available but no underlying operating system threads will block as a result of this operation.
+If two concurrent processes attempt to get the same value and it does not exist in the cache, the value will be computed once and provided to both concurrent processes as soon as it is available. The concurrent processes will semantically block for the value to become available but no underlying operating system threads will block as a result of this operation.
 
 In the event that the computation of the lookup function fails or is interrupted that will automatically be propagated to any concurrent processes waiting for the same value.
 
@@ -47,7 +47,7 @@ Note that the size of the cache may slightly exceed the specified capacity betwe
 
 A cache also allows specifying a time to live. The cache guarantees that no value will be returned from the cache if its age is greater than the specified time to live.
 
-The age is calculated based on the interval between when the value was loaded in the cache and when it is accessed.
+The expiry time is set when the lookup completes: the time to live is added to that moment. A value whose expiry time has passed is treated as absent, so the next `get` computes it again.
 
 The `Cache.make` constructor applies the same time to live to every value. To choose the time to live from the result of the lookup function, use `Cache.makeWith`. Its time to live function receives the `Exit` of the lookup, so a failure can expire sooner than a success:
 
@@ -110,7 +110,7 @@ The `refresh` operator is similar to `get`. The difference is `refresh` triggers
 
 The `size` operator returns the current size of the cache. Under concurrent access the size should be regarded as only approximate since by the time we observe a given size the cache may have a different size based on concurrent insertions or removals.
 
-Similarly, the `contains` operator returns whether a value associated with the specified key exists in the cache. Again, under concurrent access `contains` is guaranteed to return whether the cache contains a value associated with the specified key as of a given point in time but that value may be concurrently added or removed immediately after that.
+Similarly, the `contains` operator returns whether a value associated with the specified key exists in the cache. An expired value does not count, so `contains` returns `false` for it even before it is removed. Again, under concurrent access `contains` is guaranteed to return whether the cache contains a value associated with the specified key as of a given point in time but that value may be concurrently added or removed immediately after that.
 
 There are also the `cacheStats` and `entryStats` operators which allow obtaining a snapshot of statistics either for the cache itself or for a specified entry. See the sections on cache statistics and entry statistics for further discussion of this functionality.
 
