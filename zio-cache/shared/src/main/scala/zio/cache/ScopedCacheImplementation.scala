@@ -125,6 +125,16 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   }
 
   override def get(k: Key): ZIO[Scope, Error, Value] =
+    getValue(k, countStats = true)
+
+  /**
+   * Runs `get` again when the value it found was released before it could
+   * acquire it, without counting a second hit or miss.
+   */
+  private def getAgainAfterRelease(k: Key)(implicit restore: ZIO.InterruptibilityRestorer): ZIO[Scope, Error, Value] =
+    restore(getValue(k, countStats = false))
+
+  private def getValue(k: Key, countStats: Boolean): ZIO[Scope, Error, Value] =
     ZIO.uninterruptibleMask { implicit restore =>
       val newKey = new MapKey(k)
       lookupValueOf(k, newKey).memoize.flatMap { lookupValue =>
@@ -134,25 +144,25 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
         }
         value match {
           case null =>
-            trackMiss()
+            if (countStats) trackMiss()
             ensureMapSizeNotExceeded(newKey) *> lookupValue
           case MapValue.Pending(key, scoped) =>
-            trackHit()
+            if (countStats) trackHit()
             ensureMapSizeNotExceeded(key) *> scoped
           case complete @ MapValue.Complete(key, _, _, _, timeToLive) =>
             if (hasExpired(timeToLive)) {
               map.remove(k, value)
               ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(get(k)))
             } else {
-              trackHit()
-              ensureMapSizeNotExceeded(key).as(complete.toScoped(restore(get(k))))
+              if (countStats) trackHit()
+              ensureMapSizeNotExceeded(key).as(complete.toScoped(getAgainAfterRelease(k)))
             }
           case MapValue.Refreshing(promiseInProgress, complete @ MapValue.Complete(mapKey, _, _, _, ttl)) =>
-            trackHit()
+            if (countStats) trackHit()
             if (hasExpired(ttl)) {
               ensureMapSizeNotExceeded(mapKey) *> promiseInProgress
             } else {
-              ensureMapSizeNotExceeded(mapKey).as(complete.toScoped(restore(get(k))))
+              ensureMapSizeNotExceeded(mapKey).as(complete.toScoped(getAgainAfterRelease(k)))
             }
         }
       // Acquiring the value cannot block, so it is not interrupted: an interruption while waiting for the lookup
@@ -243,8 +253,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               )
             val current  = map.get(key)
             val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
-            if (isStored) cleanMapValue(current).as(completedResult.toScoped(restore(get(key))))
-            else Exit.succeed(toScopedUncached(completedResult)(restore(get(key))))
+            if (isStored) cleanMapValue(current).as(completedResult.toScoped(getAgainAfterRelease(key)))
+            else Exit.succeed(toScopedUncached(completedResult)(getAgainAfterRelease(key)))
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
             // Only undo the entry this lookup belongs to, not one added after an invalidation
             val current = map.get(key)
@@ -264,7 +274,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             val current  = map.get(key)
             val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
             val replaced = if (isStored) cleanMapValue(current) else Exit.unit
-            release(exit) *> replaced.as(completedResult.toScoped(restore(get(key))))
+            release(exit) *> replaced.as(completedResult.toScoped(getAgainAfterRelease(key)))
         }
     }
 

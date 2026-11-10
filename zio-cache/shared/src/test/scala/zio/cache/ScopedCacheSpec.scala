@@ -1140,6 +1140,37 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                     }
         } yield result
       },
+      test("counts one hit or miss for a get that finds its value released") {
+        // Runs `onRead` once, at the next clock read after it is set
+        @volatile var onRead: () => Unit = null
+        val clock = Clock.ClockJava(new java.time.Clock {
+          override def getZone: java.time.ZoneId                         = java.time.ZoneOffset.UTC
+          override def withZone(zone: java.time.ZoneId): java.time.Clock = this
+          override def instant(): java.time.Instant = {
+            val hook = onRead
+            if (hook ne null) { onRead = null; hook() }
+            java.time.Instant.EPOCH
+          }
+        })
+        for {
+          runtime <- ZIO.runtime[Any]
+          cache = new ScopedCacheImplementation[Int, Any, Nothing, Int](
+                    10,
+                    ScopedLookup[Int, Any, Nothing, Int](key => ZIO.succeed(key)),
+                    _ => Duration.Infinity,
+                    clock,
+                    ZEnvironment.empty
+                  )
+          _ <- ZIO.scoped(cache.get(1))
+          // `get` reads the clock to check that the value has not expired: invalidate the entry before `get` acquires it
+          _ <- ZIO.succeed {
+                 onRead = () =>
+                   Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.invalidate(1)).getOrThrowFiberFailure())
+               }
+          value <- ZIO.scoped(cache.get(1))
+          stats <- cache.cacheStats
+        } yield assertTrue(value == 1, stats.hits + stats.misses == 2L)
+      } @@ TestAspect.exceptJS,
       test("never gives a waiting fiber a released value when the entry is invalidated during the lookup") {
         ZIO.foreach(List.range(0, 100))(_ => waiterSeesReleasedValue(invalidateAfterLookup = false)).map { results =>
           assertTrue(!results.contains(true))
