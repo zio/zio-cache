@@ -956,7 +956,8 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             } yield assertTrue(size == 1, !hasOne, keyCount(cache) == 1)
           }
         }
-      }
+        // The hook runs `refresh` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+      } @@ TestAspect.exceptJS
     ),
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
