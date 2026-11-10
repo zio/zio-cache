@@ -1401,7 +1401,8 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         _                    <- cache.invalidateAll
         allCleaned           <- watchableLookup.assertAllCleaned
       } yield assertTrue(freed == 0, contains) && firstResourceCleaned && secondNotCleaned && allCleaned
-    },
+      // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+    } @@ TestAspect.exceptJS,
     test("get evicts entries whose access was queued while another fiber was evicting") {
       val hook    = new Hook
       val unarmed = new Hook
@@ -1414,7 +1415,8 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         _    <- ZIO.scoped(cache.get(HookedKey(3)(unarmed)))
         size <- cache.size
       } yield assertTrue(size == 2)
-    },
+      // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+    } @@ TestAspect.exceptJS,
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
       for {
