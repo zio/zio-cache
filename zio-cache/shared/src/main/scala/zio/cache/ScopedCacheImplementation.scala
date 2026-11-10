@@ -112,6 +112,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       }
     }
 
+  // Uninterruptible: the removed entries are no longer in the map, so nothing else would release them
   def freeExpired: UIO[Int] = ZIO.suspendSucceedUnsafe { implicit unsafe =>
     var removed = List.empty[MapValue.Complete[Key, Error, Value]]
     map.entrySet().forEach { entry =>
@@ -128,7 +129,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     ZIO
       .foreachDiscard(removed)(_.releaseOwner)
       .as(removed.length)
-  }
+  }.uninterruptible
 
   override def get(k: Key): ZIO[Scope, Error, Value] =
     getValue(k, countStats = true)

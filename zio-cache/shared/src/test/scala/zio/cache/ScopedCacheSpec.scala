@@ -1403,6 +1403,28 @@ object ScopedCacheSpec extends ZIOSpecDefault {
       } yield assertTrue(freed == 0, contains) && firstResourceCleaned && secondNotCleaned && allCleaned
       // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
     } @@ TestAspect.exceptJS,
+    test("freeExpired releases every expired entry when it is interrupted") {
+      val clock = new HookedClock(new Hook)
+      for {
+        releasing <- Promise.make[Nothing, Unit]
+        gate      <- Promise.make[Nothing, Unit]
+        released  <- Ref.make(0)
+        lookup =
+          (key: Int) =>
+            ZIO.acquireRelease(ZIO.succeed(key))(_ => releasing.succeed(()) *> gate.await *> released.update(_ + 1))
+        cache        = makeWithClock(lookup, 10.seconds, clock.clock)
+        _           <- ZIO.foreachDiscard(List(1, 2))(key => ZIO.scoped(cache.get(key)))
+        _           <- clock.adjust(11.seconds)
+        freeExpired <- cache.freeExpired.fork
+        _           <- releasing.await
+        // Interrupted while it releases the first entry
+        _     <- freeExpired.interruptFork
+        _     <- gate.succeed(())
+        _     <- freeExpired.await
+        _     <- cache.invalidateAll
+        count <- released.get
+      } yield assertTrue(count == 2)
+    },
     test("get evicts entries whose access was queued while another fiber was evicting") {
       val hook    = new Hook
       val unarmed = new Hook
