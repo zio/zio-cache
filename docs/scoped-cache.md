@@ -75,9 +75,9 @@ val connections: URIO[Scope, ScopedCache[String, Throwable, Connection]] =
 
 ## Using Scoped Values
 
-The `get` operator returns the cached value as a `ZIO[Scope, Error, Value]`. The `Scope` in its type tells the caller how long it uses the value. The cache counts each caller that holds the value, so the value stays alive until every caller's scope closes. A caller must not use the value after its scope closes.
+The `ScopedCache#get` operator returns the cached value as a `ZIO[Scope, Error, Value]`. The `Scope` in its type tells the caller how long it uses the value. The cache counts each caller that holds the value, so the value stays alive until every caller's scope closes. A caller must not use the value after its scope closes.
 
-To use a value for one operation, run `get` inside `ZIO.scoped`, which opens a scope and closes it when the operation finishes:
+To use a value for one operation, run `ScopedCache#get` inside `ZIO.scoped`, which opens a scope and closes it when the operation finishes:
 
 ```scala mdoc:compile-only
 import zio._
@@ -97,18 +97,18 @@ def query(cache: ScopedCache[String, Throwable, Connection], url: String): Task[
 
 A resource is released only after two things are true. First, the value has left the cache, because it was evicted, invalidated, expired, or the cache itself was closed. Second, every caller that obtained the value through `get` has closed its scope.
 
-Expired values are removed in two ways. A `get` on an expired key removes the old value before it computes a new one. A background fiber also checks the cache about every second and removes all expired values. Both paths release the resources of values that no caller uses.
+Expired values are removed in two ways. A `ScopedCache#get` call on an expired key removes the old value before it computes a new one. A background fiber also checks the cache about every second and removes all expired values. Both paths release the resources of values that no caller uses.
 
 If the lookup fails, the failure is cached, as with a plain [Cache](./cache.md). The failed lookup releases any resource it acquired before it failed.
 
 ## Operators
 
-In addition to `get`, `ScopedCache` provides these operators:
+In addition to `ScopedCache#get`, `ScopedCache` provides these operators:
 
-- `refresh` computes a new value with the lookup function and replaces the cached one. Concurrent calls to `get` keep using the old value until the new one is ready, and the old resource is released once no caller uses it.
+- `ScopedCache#refresh` computes a new value with the lookup function and replaces the cached one. Concurrent calls to `ScopedCache#get` keep using the old value until the new one is ready, and the old resource is released once no caller uses it.
 - `invalidate` removes the value for a key from the cache. The resource is released after its last caller closes its scope.
 - `invalidateAll` removes all values from the cache.
-- `contains` returns whether the cache holds a value for a key. Unlike `Cache#contains`, it does not check expiry: an expired value still counts until the background fiber removes it (see [Lifetime of Scoped Values](#lifetime-of-scoped-values)).
+- `ScopedCache#contains` returns whether the cache holds a value for a key. Unlike `Cache#contains`, it does not check expiry: an expired value still counts until the background fiber removes it (see [Lifetime of Scoped Values](#lifetime-of-scoped-values)).
 - `size` returns the approximate number of values in the cache. It counts expired values that the background fiber has not removed yet.
 - `cacheStats` returns a snapshot of the cache statistics. See [Cache Statistics](./cache-statistics.md).
 - `entryStats` returns the statistics of one entry. See [Entry Statistics](./entry-statistics.md).

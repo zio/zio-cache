@@ -7,7 +7,7 @@ A `Lookup` is a lookup function that, given a key of type `Key`, knows how to co
 
 `Lookup` is a case class that wraps a function from a key to a `ZIO` effect. Its type parameters are `Key`, `Environment`, `Error`, and `Value`. Because `Lookup` also extends the function type `Key => ZIO[Environment, Error, Value]`, calling `Lookup#apply` with a key runs the wrapped function on it.
 
-You can think of a key as essentially an effectual function to compute a value. And in fact you can construct a `Lookup` from any effectual function using the `apply` method on the `Lookup` companion object:
+You can think of a key as essentially an effectual function to compute a value. And in fact you can construct a `Lookup` from any effectual function using the `Lookup.apply` method on the `Lookup` companion object:
 
 ```scala mdoc:compile-only
 import zio._
