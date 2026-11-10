@@ -1425,6 +1425,20 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         count <- released.get
       } yield assertTrue(count == 2)
     },
+    test("freeExpired releases every expired entry when a release fails") {
+      val clock = new HookedClock(new Hook)
+      for {
+        released <- Ref.make(0)
+        lookup =
+          (key: Int) =>
+            ZIO.acquireRelease(ZIO.succeed(key))(_ => released.update(_ + 1) *> ZIO.die(new RuntimeException))
+        cache  = makeWithClock(lookup, 10.seconds, clock.clock)
+        _     <- ZIO.foreachDiscard(List(1, 2))(key => ZIO.scoped(cache.get(key)))
+        _     <- clock.adjust(11.seconds)
+        exit  <- cache.freeExpired.exit
+        count <- released.get
+      } yield assertTrue(exit.isFailure, count == 2)
+    },
     test("get evicts entries whose access was queued while another fiber was evicting") {
       val hook    = new Hook
       val unarmed = new Hook

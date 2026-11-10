@@ -126,8 +126,10 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       }
     }
 
+    // A failing release must not stop the others, so every entry is released before the failures are reported
     ZIO
-      .foreachDiscard(removed)(_.releaseOwner)
+      .foreach(removed)(_.releaseOwner.exit)
+      .flatMap(exits => Exit.collectAllPar(exits).getOrElse(Exit.unit))
       .as(removed.length)
   }.uninterruptible
 
