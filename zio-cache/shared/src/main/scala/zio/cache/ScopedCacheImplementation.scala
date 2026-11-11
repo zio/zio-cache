@@ -219,16 +219,18 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       }
     }
 
+  // Uninterruptible: the removed entry is no longer in the map, so nothing else would release it
   override def invalidate(k: Key): UIO[Unit] = ZIO.suspendSucceed {
     map.remove(k) match {
       case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
       case MapValue.Refreshing(_, complete)            => complete.releaseOwner
       case _                                           => Exit.unit
     }
-  }
+  }.uninterruptible
 
+  // `foreachParDiscard` counts the keys before it iterates them, so it is given a copy that cannot change in between
   override def invalidateAll: UIO[Unit] =
-    ZIO.foreachParDiscard(map.keySet().asScala)(invalidate)
+    ZIO.foreachParDiscard(map.keySet().asScala.toList)(invalidate)
 
   override def size: UIO[Int] =
     ZIO.succeed(map.size)

@@ -1453,6 +1453,47 @@ object ScopedCacheSpec extends ZIOSpecDefault {
       } yield assertTrue(size == 2)
       // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
     } @@ TestAspect.exceptJS,
+    test("invalidate releases the entry when it is interrupted") {
+      for {
+        releasing <- Promise.make[Nothing, Unit]
+        gate      <- Promise.make[Nothing, Unit]
+        released  <- Ref.make(0)
+        lookup =
+          ScopedLookup((key: Int) =>
+            ZIO.acquireRelease(ZIO.succeed(key))(_ => releasing.succeed(()) *> gate.await *> released.update(_ + 1))
+          )
+        result <- ZIO.scoped {
+                    ScopedCache.make(10, Duration.Infinity, lookup).flatMap { cache =>
+                      for {
+                        _          <- ZIO.scoped(cache.get(1))
+                        invalidate <- cache.invalidate(1).fork
+                        _          <- releasing.await
+                        // Interrupted while it releases the entry
+                        _     <- invalidate.interruptFork
+                        _     <- gate.succeed(())
+                        _     <- invalidate.await
+                        _     <- cache.invalidateAll
+                        count <- released.get
+                      } yield assertTrue(count == 1)
+                    }
+                  }
+      } yield result
+    },
+    test("invalidateAll completes when entries are invalidated while it runs") {
+      val keys = (1 to 10).toList
+      ZIO.scoped {
+        ScopedCache.make(100, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+          val round = for {
+            _         <- ZIO.foreachDiscard(keys)(key => ZIO.scoped(cache.get(key)))
+            all       <- cache.invalidateAll.fork
+            _         <- ZIO.foreachParDiscard(keys)(cache.invalidate)
+            completed <- all.join.disconnect.timeout(5.seconds)
+          } yield completed.isDefined
+          // The race needs the invalidations to land while `invalidateAll` starts, so it is tried several times
+          ZIO.foreach(1 to 100)(_ => round).map(completed => assertTrue(completed.forall(identity)))
+        }
+      }
+    } @@ TestAspect.withLiveClock,
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
       for {
