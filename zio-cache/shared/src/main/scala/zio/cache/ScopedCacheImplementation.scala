@@ -393,10 +393,11 @@ object ScopedCacheImplementation {
 
       def releaseOwner: UIO[Unit] =
         exit.foldExit(
-          _ => ZIO.unit,
+          _ => Exit.unit,
           { case (_, finalizer) =>
-            ZIO.succeed(ownerCount.decrementAndGet()).flatMap { numOwner =>
-              finalizer(Exit.unit).whenDiscard(numOwner == 0)
+            ZIO.suspendSucceed {
+              val numOwner = ownerCount.decrementAndGet()
+              if (numOwner == 0) finalizer(Exit.unit).unit else Exit.unit
             }
           }
         )
