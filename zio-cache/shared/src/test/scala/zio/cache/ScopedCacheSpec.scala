@@ -1490,7 +1490,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
             completed <- all.join.disconnect.timeout(5.seconds)
           } yield completed.isDefined
           // The race needs the invalidations to land while `invalidateAll` starts, so it is tried several times
-          ZIO.foreach(1 to 100)(_ => round).map(completed => assertTrue(completed.forall(identity)))
+          ZIO.foreach(1 to 100)(_ => round).map(completed => assertTrue(completed.count(done => !done) == 0))
         }
       }
     } @@ TestAspect.withLiveClock,
