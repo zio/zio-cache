@@ -688,13 +688,14 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                               _            <- TestClock.adjust(11.second)
                               _            <- watchableLookup.lock
                               refreshFiber <- scopedCache.refresh(key = ()).fork
+                              // The refresh calls the lookup a second time once it has released the expired resource
                               _ <-
                                 watchableLookup
                                   .getCalledNum(key = ())
                                   .repeat(
-                                    (Schedule.recurWhile[Int](_ < 1) >>> Schedule.elapsed).whileOutput(_.toMillis < 100)
+                                    (Schedule.recurWhile[Int](_ < 2) && Schedule.spaced(10.millis)).upTo(5.seconds)
                                   )
-                              _                    <- Live.live(ZIO.sleep(100.millis))
+                                  .withClock(Clock.ClockLive)
                               secondLookupCalled   <- watchableLookup.assertCalledNum(key = ())(equalTo(2))
                               firstResourceCleaned <- watchableLookup.assertFirstNCreatedResourceCleaned(key = (), 1)
                               _                    <- watchableLookup.unlock
