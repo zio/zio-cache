@@ -243,6 +243,109 @@ object CacheSpec extends ZIOSpecDefault {
           hasOne <- cache.contains(one)
         } yield assertTrue(size == 1, !hasOne, keyCount(cache) == 1)
       }
+    ),
+    suite("lookup in progress")(
+      test("does not store its result if the entry is invalidated") {
+        for {
+          store   <- Ref.make("stale")
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((_: Int) => store.get.flatMap(v => started.succeed(()) *> gate.await.as(v)))
+                   )
+          fiber <- cache.get(1).fork
+          _     <- started.await
+          _     <- store.set("fresh")
+          _     <- cache.invalidate(1)
+          _     <- gate.succeed(())
+          first <- fiber.join
+          out   <- cache.get(1)
+        } yield assertTrue(first == "stale", out == "fresh")
+      },
+      test("does not store its result if the entry is evicted") {
+        for {
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     1,
+                     Duration.Infinity,
+                     Lookup((key: Int) => if (key == 1) started.succeed(()) *> gate.await.as(key) else ZIO.succeed(key))
+                   )
+          fiber <- cache.get(1).fork
+          _     <- started.await
+          _     <- cache.get(2)
+          _     <- gate.succeed(())
+          _     <- fiber.join
+          size  <- cache.size
+          one   <- cache.contains(1)
+        } yield assertTrue(size == 1, !one)
+      },
+      test("runs the lookup again after it is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          fiber <- cache.get(1).fork
+          _     <- started.await
+          _     <- fiber.interrupt
+          value <- cache.get(1)
+          n     <- calls.get
+        } yield assertTrue(value == 1, n == 2)
+      },
+      test("does not remove a newer entry when interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          fiber <- cache.get(1).fork
+          _     <- started.await
+          _     <- cache.invalidate(1)
+          _     <- cache.get(1)
+          _     <- fiber.interrupt
+          _     <- cache.get(1)
+          n     <- calls.get
+        } yield assertTrue(n == 2)
+      },
+      test("keeps the previous value when a refresh is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 1) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          _        <- cache.get(1)
+          fiber    <- cache.refresh(1).fork
+          _        <- started.await
+          _        <- fiber.interrupt
+          contains <- cache.contains(1)
+          _        <- cache.get(1)
+          n        <- calls.get
+        } yield assertTrue(contains, n == 2)
+      }
     )
   )
 
