@@ -59,7 +59,7 @@ If multiple concurrent processes get the value at the same time the value will o
 In order to use this library, we need to add the following line in our `build.sbt` file:
 
 ```sbt
-libraryDependencies += "dev.zio" %% "zio-cache" % "0.3.0"
+libraryDependencies += "dev.zio" %% "zio-cache" % "0.4.0"
 ```
 
 ## Example
