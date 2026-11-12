@@ -315,42 +315,40 @@ object Cache {
       clock.unsafe.instant()(Unsafe).isAfter(timeToLive)
 
     private def trackAccess(key: MapKey[Key]): Unit = {
-      @tailrec def loop(): Unit = {
-        if (updating.compareAndSet(false, true)) {
-          var loop = true
-          while (loop) {
-            val key = accesses.poll(null)
-            if (key ne null) {
-              keys.add(key)
-            } else {
-              loop = false
-            }
-          }
-          var size = map.size
-          // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
-          val tooManyStaleKeys = keys.size > 2 * size
-          if (tooManyStaleKeys) keys.retain(isLive)
-          loop = size > capacity
-          while (loop) {
-            val key = keys.remove()
-            if (key ne null) {
-              if (removeEntryOf(key)) {
-                size -= 1
-                loop = size > capacity
-              }
-            } else {
-              loop = false
-            }
-          }
-          updating.set(false)
-        }
-
-        // Someone might have added a key right after we drained the queue but before setting updating to `false`
-        if (!accesses.isEmpty()) loop() else ()
-      }
+      def tryStartProcessingAccesses(): Boolean =
+        !accesses.isEmpty() && updating.compareAndSet(false, true)
 
       accesses.offer(key)
-      loop()
+      // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again.
+      // A fiber that loses the race returns: its access is queued, and the fiber holding `updating` processes it.
+      while (tryStartProcessingAccesses()) {
+        var loop = true
+        while (loop) {
+          val key = accesses.poll(null)
+          if (key ne null) {
+            keys.add(key)
+          } else {
+            loop = false
+          }
+        }
+        var size = map.size
+        // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
+        val tooManyStaleKeys = keys.size > 2 * size
+        if (tooManyStaleKeys) keys.retain(isLive)
+        loop = size > capacity
+        while (loop) {
+          val key = keys.remove()
+          if (key ne null) {
+            if (removeEntryOf(key)) {
+              size -= 1
+              loop = size > capacity
+            }
+          } else {
+            loop = false
+          }
+        }
+        updating.set(false)
+      }
     }
 
     /**
