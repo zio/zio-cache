@@ -24,6 +24,12 @@ package zio.cache
 private[cache] final class KeySet[Key] {
   private[this] var head: MapKey[Key] = null
   private[this] var tail: MapKey[Key] = null
+  private[this] var count: Int        = 0
+
+  /**
+   * Returns the number of keys in the set.
+   */
+  def size: Int = count
 
   /**
    * Adds the specified key to the set.
@@ -42,6 +48,8 @@ private[cache] final class KeySet[Key] {
             head = next
             head.previous = null
           }
+        } else {
+          count += 1
         }
         tail.next = key
         key.previous = tail
@@ -49,6 +57,7 @@ private[cache] final class KeySet[Key] {
       } else {
         head = key
         tail = key
+        count += 1
       }
     }
 
@@ -67,7 +76,28 @@ private[cache] final class KeySet[Key] {
         head = null
         tail = null
       }
+      count -= 1
     }
     key
+  }
+
+  /**
+   * Removes every key that does not satisfy the specified predicate, keeping
+   * the order of the remaining keys.
+   */
+  def retain(f: MapKey[Key] => Boolean): Unit = {
+    var key = head
+    while (key ne null) {
+      val next = key.next
+      if (!f(key)) {
+        val previous = key.previous
+        if (previous ne null) previous.next = next else head = next
+        if (next ne null) next.previous = previous else tail = previous
+        key.previous = null
+        key.next = null
+        count -= 1
+      }
+      key = next
+    }
   }
 }

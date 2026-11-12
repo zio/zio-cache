@@ -3,7 +3,7 @@ package zio.cache
 import zio.Exit.{Failure, Success}
 import zio.test.Assertion._
 import zio.test._
-import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, ZEnvironment, ZIO, durationInt}
+import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, Unsafe, ZEnvironment, ZIO, durationInt}
 
 object ScopedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment with Scope, Any] = suite("SharedScoped")(
@@ -898,6 +898,67 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         }
       }
     ),
+    suite("key tracking")(
+      test("does not grow when an entry expires and is reloaded") {
+        ZIO.scoped {
+          ScopedCache.make(10, 1.second, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            (ZIO.scoped(cache.get(42)) *> TestClock.adjust(2.seconds)).repeatN(99).as {
+              assertTrue(keyCount(cache) <= 2)
+            }
+          }
+        }
+      },
+      test("does not grow when an entry is invalidated and reloaded") {
+        ZIO.scoped {
+          ScopedCache.make(10, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            (ZIO.scoped(cache.get(42)) *> cache.invalidate(42)).repeatN(99).as {
+              assertTrue(keyCount(cache) <= 2)
+            }
+          }
+        }
+      },
+      test("does not grow when an entry is refreshed") {
+        ZIO.scoped {
+          ScopedCache.make(10, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            (cache.refresh(42) *> ZIO.scoped(cache.get(42))).repeatN(99).as {
+              assertTrue(keyCount(cache) == 1)
+            }
+          }
+        }
+      },
+      test("evicts the least recently used entry") {
+        ZIO.scoped {
+          ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: Int) => ZIO.succeed(key))).flatMap { cache =>
+            for {
+              _     <- ZIO.foreachDiscard(List(1, 2, 1, 3))(key => ZIO.scoped(cache.get(key)))
+              one   <- cache.contains(1)
+              two   <- cache.contains(2)
+              three <- cache.contains(3)
+            } yield assertTrue(one, !two, three)
+          }
+        }
+      },
+      test("evicts an entry that changes state while it is being evicted") {
+        ZIO.scoped {
+          ScopedCache.make(1, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap { cache =>
+            for {
+              runtime <- ZIO.runtime[Any]
+              one      = new HookKey(1)
+              _       <- ZIO.scoped(cache.get(one))
+              // Eviction hashes `one` to read its entry, then again to remove it: refresh the entry in between
+              // (refreshing a stored entry does not track an access, so it does not re-enter the eviction)
+              _ <- ZIO.succeed(one.onHash(2) {
+                     Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.refresh(one)).getOrThrowFiberFailure())
+                   })
+              _      <- ZIO.scoped(cache.get(new HookKey(2)))
+              size   <- cache.size
+              hasOne <- cache.contains(one)
+            } yield assertTrue(size == 1, !hasOne, keyCount(cache) == 1)
+          }
+        }
+        // The hook runs `refresh` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+      } @@ TestAspect.exceptJS
+    ),
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
       for {
@@ -1174,6 +1235,9 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           }
       } yield notUsedReleasers
   }
+
+  private def keyCount(cache: ScopedCache[?, ?, ?]): Int =
+    cache.asInstanceOf[ScopedCacheImplementation[?, ?, ?, ?]].keyCount
 
   def assertAllM(results: Iterable[UIO[TestResult]]): UIO[TestResult] =
     ZIO.foldLeft(results)(assertCompletes)((l, r) => r.map(l && _))

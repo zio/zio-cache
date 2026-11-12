@@ -34,11 +34,14 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
         }
       }
       var size = map.size
+      // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
+      val tooManyStaleKeys = keys.size > 2 * size
+      if (tooManyStaleKeys) keys.retain(isLive)
       loop = size > capacity
       while (loop) {
         val key = keys.remove()
         if (key ne null) {
-          val removed = map.remove(key.value)
+          val removed = removeEntryOf(key)
           if (removed ne null) {
             size -= 1
             cleanedKey += removed
@@ -52,6 +55,26 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     }
     cleanedKey.result()
   }
+
+  /**
+   * Removes the entry tracked by `key`, if the map still holds it, and returns
+   * the removed entry, or `null` if there was none.
+   */
+  private def removeEntryOf(key: MapKey[Key]): MapValue[Key, Error, Value] = {
+    def changedBeforeRemove(value: MapValue[Key, Error, Value]): Boolean =
+      isEntryOf(key, value) && !map.remove(key.value, value)
+
+    var value = map.get(key.value)
+    // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so the remove is retried
+    while (changedBeforeRemove(value)) value = map.get(key.value)
+    if (isEntryOf(key, value)) value else null
+  }
+
+  private def isLive(key: MapKey[Key]): Boolean =
+    isEntryOf(key, map.get(key.value))
+
+  private def isEntryOf(key: MapKey[Key], value: MapValue[Key, Error, Value]): Boolean =
+    (value ne null) && (value.key eq key)
 
   private def trackHit(): Unit =
     hits.increment()
@@ -97,17 +120,16 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
 
   override def get(k: Key): ZIO[Scope, Error, Value] =
     ZIO.uninterruptibleMask { implicit restore =>
-      lookupValueOf(k).memoize.flatMap { lookupValue =>
-        var key: MapKey[Key] = null
-        var value            = map.get(k)
+      val newKey = new MapKey(k)
+      lookupValueOf(k, newKey).memoize.flatMap { lookupValue =>
+        var value = map.get(k)
         if (value eq null) {
-          key = new MapKey(k)
-          value = map.putIfAbsent(k, MapValue.Pending(key, lookupValue))
+          value = map.putIfAbsent(k, MapValue.Pending(newKey, lookupValue))
         }
         value match {
           case null =>
             trackMiss()
-            ensureMapSizeNotExceeded(key) *> lookupValue
+            ensureMapSizeNotExceeded(newKey) *> lookupValue
           case MapValue.Pending(key, scoped) =>
             trackHit()
             ensureMapSizeNotExceeded(key) *> scoped
@@ -132,11 +154,15 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
 
   override def refresh(k: Key): IO[Error, Unit] =
     ZIO.uninterruptibleMask { implicit restore =>
-      lookupValueOf(k).memoize.flatMap { scoped =>
-        var value               = map.get(k)
-        var newKey: MapKey[Key] = null
+      val current = map.get(k)
+      // A refresh keeps the key of the entry it replaces
+      val newKey = current match {
+        case MapValue.Complete(key, _, _, _, _)                                    => key
+        case null | _: MapValue.Pending[?, ?, ?] | _: MapValue.Refreshing[?, ?, ?] => new MapKey[Key](k)
+      }
+      lookupValueOf(k, newKey).memoize.flatMap { scoped =>
+        var value = current
         if (value eq null) {
-          newKey = new MapKey[Key](k)
           value = map.putIfAbsent(k, MapValue.Pending(newKey, scoped))
         }
         val finalScoped = value match {
@@ -174,6 +200,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   override def size: UIO[Int] =
     ZIO.succeed(map.size)
 
+  private[cache] def keyCount: Int =
+    keys.size
+
   private def cleanMapValue(mapValue: MapValue[Key, Error, Value]): UIO[Unit] =
     mapValue match {
       case complete @ MapValue.Complete(_, _, _, _, _) => complete.releaseOwner
@@ -181,7 +210,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
       case _                                           => Exit.unit
     }
 
-  private def lookupValueOf(key: Key)(implicit restore: ZIO.InterruptibilityRestorer): UIO[ZIO[Scope, Error, Value]] =
+  private def lookupValueOf(key: Key, mapKey: MapKey[Key])(implicit
+    restore: ZIO.InterruptibilityRestorer
+  ): UIO[ZIO[Scope, Error, Value]] =
     ZIO.suspendSucceed {
       val scope   = Scope.unsafe.make(Unsafe)
       val release = scope.close(_)
@@ -195,7 +226,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               Exit.succeed(value -> release)
             val completedResult = MapValue
               .Complete(
-                key = new MapKey(key),
+                key = mapKey,
                 exit = exitWithReleaser,
                 ownerCount = new AtomicInteger(1),
                 entryStats = EntryStats(now),
@@ -211,7 +242,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             val expiredAt = now.plus(timeToLive(exit))
             val completedResult =
               MapValue.Complete(
-                key = new MapKey(key),
+                key = mapKey,
                 exit = exit,
                 ownerCount = new AtomicInteger(0),
                 entryStats = EntryStats(now),
@@ -249,7 +280,9 @@ object ScopedCacheImplementation {
    * lookup function, when it is available, or `Complete` with an `Exit` value
    * that contains the result of computing the lookup function.
    */
-  private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable
+  private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable {
+    def key: MapKey[Key]
+  }
 
   private object MapValue {
     final case class Pending[Key, Error, Value](
@@ -288,7 +321,9 @@ object ScopedCacheImplementation {
     final case class Refreshing[Key, Error, Value](
       scopedEffect: UIO[ZIO[Scope, Error, Value]],
       complete: Complete[Key, Error, Value]
-    ) extends MapValue[Key, Error, Value]
+    ) extends MapValue[Key, Error, Value] {
+      def key: MapKey[Key] = complete.key
+    }
   }
 
   /**
