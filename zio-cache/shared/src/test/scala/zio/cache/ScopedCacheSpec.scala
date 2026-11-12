@@ -11,6 +11,7 @@ import zio.{
   IO,
   Promise,
   Ref,
+  Runtime,
   Schedule,
   Scope,
   UIO,
@@ -19,6 +20,9 @@ import zio.{
   ZIO,
   durationInt
 }
+
+import java.time.{Instant, ZoneId, ZoneOffset}
+import java.util.concurrent.atomic.AtomicReference
 
 object ScopedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment with Scope, Any] = suite("SharedScoped")(
@@ -1348,6 +1352,107 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         } yield result
       }
     ),
+    test("contains returns true during ongoing lookup") {
+      for {
+        started <- Promise.make[Nothing, Unit]
+        promise <- Promise.make[Nothing, Int]
+        cache <-
+          ScopedCache.make(100, Duration.Infinity, ScopedLookup((_: Int) => started.succeed(()) *> promise.await))
+        _        <- ZIO.scoped(cache.get(42)).fork
+        _        <- started.await
+        contains <- cache.contains(42)
+        _        <- promise.succeed(42)
+      } yield assertTrue(contains)
+    },
+    test("get on an expired entry invalidated concurrently releases it only once") {
+      val hook  = new Hook
+      val clock = new HookedClock(hook)
+      for {
+        watchableLookup <- WatchableLookup.makeUnit
+        cache            = makeWithClock(watchableLookup.lookup, 10.seconds, clock.clock)
+        userScope       <- Scope.make
+        _               <- cache.get(()).provideEnvironment(ZEnvironment(userScope))
+        _               <- clock.adjust(11.seconds)
+        // `invalidate` runs after `get` reads the expired entry and before `get` removes it
+        _                    <- hook.arm(cache.invalidate(()))
+        _                    <- ZIO.scoped(cache.get(()))
+        firstResource        <- watchableLookup.firstCreatedResource(())
+        notCleanedWhileInUse <- firstResource.assertAcquiredOnceAndNotCleaned
+        _                    <- userScope.close(Exit.unit)
+        _                    <- cache.invalidateAll
+        allCleaned           <- watchableLookup.assertAllCleaned
+      } yield notCleanedWhileInUse && allCleaned
+    },
+    test("freeExpired keeps an entry replaced after it was found expired") {
+      val hook  = new Hook
+      val clock = new HookedClock(hook)
+      for {
+        watchableLookup <- WatchableLookup.makeUnit
+        cache            = makeWithClock(watchableLookup.lookup, 10.seconds, clock.clock)
+        _               <- ZIO.scoped(cache.get(()))
+        _               <- clock.adjust(11.seconds)
+        // `get` replaces the expired entry after `freeExpired` finds it expired and before `freeExpired` removes it
+        _                    <- hook.arm(ZIO.scoped(cache.get(())))
+        freed                <- cache.freeExpired
+        contains             <- cache.contains(())
+        firstResourceCleaned <- watchableLookup.assertFirstNCreatedResourceCleaned((), 1)
+        secondResource       <- watchableLookup.createdResources.map(_.apply(())(1))
+        secondNotCleaned     <- secondResource.assertAcquiredOnceAndNotCleaned
+        _                    <- cache.invalidateAll
+        allCleaned           <- watchableLookup.assertAllCleaned
+      } yield assertTrue(freed == 0, contains) && firstResourceCleaned && secondNotCleaned && allCleaned
+      // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+    } @@ TestAspect.exceptJS,
+    test("freeExpired releases every expired entry when it is interrupted") {
+      val clock = new HookedClock(new Hook)
+      for {
+        releasing <- Promise.make[Nothing, Unit]
+        gate      <- Promise.make[Nothing, Unit]
+        released  <- Ref.make(0)
+        lookup =
+          (key: Int) =>
+            ZIO.acquireRelease(ZIO.succeed(key))(_ => releasing.succeed(()) *> gate.await *> released.update(_ + 1))
+        cache        = makeWithClock(lookup, 10.seconds, clock.clock)
+        _           <- ZIO.foreachDiscard(List(1, 2))(key => ZIO.scoped(cache.get(key)))
+        _           <- clock.adjust(11.seconds)
+        freeExpired <- cache.freeExpired.fork
+        _           <- releasing.await
+        // Interrupted while it releases the first entry
+        _     <- freeExpired.interruptFork
+        _     <- gate.succeed(())
+        _     <- freeExpired.await
+        _     <- cache.invalidateAll
+        count <- released.get
+      } yield assertTrue(count == 2)
+    },
+    test("freeExpired releases every expired entry when a release fails") {
+      val clock = new HookedClock(new Hook)
+      for {
+        released <- Ref.make(0)
+        lookup =
+          (key: Int) =>
+            ZIO.acquireRelease(ZIO.succeed(key))(_ => released.update(_ + 1) *> ZIO.die(new RuntimeException))
+        cache  = makeWithClock(lookup, 10.seconds, clock.clock)
+        _     <- ZIO.foreachDiscard(List(1, 2))(key => ZIO.scoped(cache.get(key)))
+        _     <- clock.adjust(11.seconds)
+        exit  <- cache.freeExpired.exit
+        count <- released.get
+      } yield assertTrue(exit.isFailure, count == 2)
+    },
+    test("get evicts entries whose access was queued while another fiber was evicting") {
+      val hook    = new Hook
+      val unarmed = new Hook
+      for {
+        cache <- ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: HookedKey) => ZIO.succeed(key.id)))
+        _     <- ZIO.scoped(cache.get(HookedKey(1)(hook)))
+        _     <- ZIO.scoped(cache.get(HookedKey(2)(unarmed)))
+        // `get(4)` queues its access while `get(3)` evicts key 1, before `get(3)` finishes processing accesses
+        _    <- hook.arm(ZIO.scoped(cache.get(HookedKey(4)(unarmed))))
+        _    <- ZIO.scoped(cache.get(HookedKey(3)(unarmed)))
+        size <- cache.size
+      } yield assertTrue(size == 2)
+      // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+    } @@ TestAspect.exceptJS,
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
       for {
@@ -1358,6 +1463,69 @@ object ScopedCacheSpec extends ZIOSpecDefault {
       } yield assertCompletes
     } @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds) @@ TestAspect.exceptJS
   )
+
+  /**
+   * Builds the cache without the background cleaner, with a capacity of 10.
+   */
+  private def makeWithClock[Key, Value](
+    lookup: Key => ZIO[Scope, Nothing, Value],
+    timeToLive: Duration,
+    clock: Clock
+  ): ScopedCacheImplementation[Key, Any, Nothing, Value] =
+    new ScopedCacheImplementation[Key, Any, Nothing, Value](
+      10,
+      ScopedLookup[Key, Any, Nothing, Value](lookup),
+      _ => timeToLive,
+      clock,
+      ZEnvironment.empty
+    )
+
+  /**
+   * Runs the armed effect, once, synchronously inside the next call to `run`,
+   * to inject a concurrent operation at an exact point of a cache operation.
+   */
+  final class Hook {
+    private val armed = new AtomicReference[UIO[Any]](null)
+
+    def arm(effect: UIO[Any]): UIO[Unit] = ZIO.succeed(armed.set(effect))
+
+    def run(): Unit = {
+      val effect = armed.getAndSet(null)
+      if (effect ne null) Unsafe.unsafe { implicit unsafe =>
+        Runtime.default.unsafe.run(effect).getOrThrowFiberFailure()
+        ()
+      }
+    }
+  }
+
+  /**
+   * A manually adjusted clock that runs `hook` every time it is read.
+   */
+  final class HookedClock(hook: Hook) {
+    @volatile private var now: Instant = Instant.EPOCH
+
+    def adjust(duration: Duration): UIO[Unit] = ZIO.succeed { now = now.plus(duration) }
+
+    val clock: Clock = Clock.ClockJava(new java.time.Clock {
+      override def getZone: ZoneId                         = ZoneOffset.UTC
+      override def withZone(zone: ZoneId): java.time.Clock = this
+      override def instant(): Instant = {
+        hook.run()
+        now
+      }
+    })
+  }
+
+  /**
+   * A key that runs `hook` every time it is hashed. Equality only depends on
+   * `id`.
+   */
+  final case class HookedKey(id: Int)(hook: Hook) {
+    override def hashCode: Int = {
+      hook.run()
+      id
+    }
+  }
 
   type Releaser = (=> Exit[Any, Any]) => UIO[Unit]
 
