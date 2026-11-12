@@ -3,7 +3,26 @@ package zio.cache
 import zio.Exit.{Failure, Success}
 import zio.test.Assertion._
 import zio.test._
-import zio.{Clock, Duration, Exit, IO, Ref, Schedule, Scope, UIO, Unsafe, ZEnvironment, ZIO, durationInt}
+import zio.{
+  Clock,
+  Duration,
+  Exit,
+  Fiber,
+  IO,
+  Promise,
+  Ref,
+  Runtime,
+  Schedule,
+  Scope,
+  UIO,
+  Unsafe,
+  ZEnvironment,
+  ZIO,
+  durationInt
+}
+
+import java.time.{Instant, ZoneId, ZoneOffset}
+import java.util.concurrent.atomic.AtomicReference
 
 object ScopedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment with Scope, Any] = suite("SharedScoped")(
@@ -533,7 +552,31 @@ object ScopedCacheSpec extends ZIOSpecDefault {
               }
           } yield testResult
         }
-      }
+      },
+      test("stores its value when a get stores the entry first") {
+        for {
+          calls <- Ref.make(0)
+          result <- ZIO.scoped {
+                      ScopedCache
+                        .make(100, Duration.Infinity, ScopedLookup((_: HookKey) => calls.updateAndGet(_ + 1)))
+                        .flatMap { cache =>
+                          for {
+                            runtime <- ZIO.runtime[Any]
+                            one      = new HookKey(1)
+                            // `refresh` hashes `one` to read its entry, then again to insert one: `get` stores it in between
+                            _ <- ZIO.succeed(one.onHash(2) {
+                                   Unsafe.unsafe { implicit unsafe =>
+                                     runtime.unsafe.run(ZIO.scoped(cache.get(new HookKey(1)))).getOrThrowFiberFailure()
+                                   }
+                                 })
+                            _     <- cache.refresh(one)
+                            value <- ZIO.scoped(cache.get(one))
+                          } yield assertTrue(value == 2)
+                        }
+                    }
+        } yield result
+        // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+      } @@ TestAspect.exceptJS
     ),
     suite("expiration")(
       suite("get")(
@@ -980,6 +1023,436 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         contains2 <- cache.contains(42)
       } yield assertTrue(contains1, !contains2)
     },
+    suite("lookup in progress")(
+      test("does not store its result if the entry is invalidated") {
+        for {
+          store   <- Ref.make("stale")
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (_: Int) =>
+                     store.get.flatMap(value => (started.succeed(()) *> gate.await).when(value == "stale").as(value))
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber <- ZIO.scoped(cache.get(1)).fork
+                          _     <- started.await
+                          _     <- store.set("fresh")
+                          _     <- cache.invalidate(1)
+                          _     <- gate.succeed(())
+                          first <- fiber.join
+                          next  <- ZIO.scoped(cache.get(1))
+                        } yield assertTrue(first == "stale", next == "fresh")
+                      }
+                    }
+        } yield result
+      },
+      test("does not store a failure if the entry is invalidated") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       if (n == 0) started.succeed(()) *> gate.await *> ZIO.fail("stale") else ZIO.succeed(key)
+                     }
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber <- ZIO.scoped(cache.get(1)).either.fork
+                          _     <- started.await
+                          _     <- cache.invalidate(1)
+                          _     <- gate.succeed(())
+                          first <- fiber.join
+                          next  <- ZIO.scoped(cache.get(1)).either
+                        } yield assertTrue(first == Left("stale"), next == Right(1))
+                      }
+                    }
+        } yield result
+      },
+      test("releases its resource if the entry is evicted") {
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          started  <- Promise.make[Nothing, Unit]
+          gate     <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     if (key == 1) started.succeed(()) *> gate.await *> resource.managed else ZIO.succeed(key)
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(1, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber   <- ZIO.scoped(cache.get(1)).fork
+                          _       <- started.await
+                          _       <- ZIO.scoped(cache.get(2))
+                          _       <- gate.succeed(())
+                          _       <- fiber.join
+                          size    <- cache.size
+                          hasOne  <- cache.contains(1)
+                          cleaned <- resource.assertAcquiredOnceAndCleaned
+                        } yield assertTrue(size == 1, !hasOne) && cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("shares its value between the fibers waiting for it if the entry is invalidated") {
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          started  <- Promise.make[Nothing, Unit]
+          gate     <- Promise.make[Nothing, Unit]
+          lookup    = ScopedLookup((_: Int) => started.succeed(()) *> gate.await *> resource.managed)
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          first     <- Scope.make
+                          second    <- Scope.make
+                          runner    <- cache.get(1).provideEnvironment(ZEnvironment(first)).fork
+                          _         <- started.await
+                          waiter    <- cache.get(1).provideEnvironment(ZEnvironment(second)).fork
+                          _         <- waiter.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                          _         <- cache.invalidate(1)
+                          _         <- gate.succeed(())
+                          _         <- runner.join *> waiter.join
+                          _         <- first.close(Exit.unit)
+                          heldByOne <- resource.assertAcquiredOnceAndNotCleaned
+                          _         <- second.close(Exit.unit)
+                          cleaned   <- resource.assertAcquiredOnceAndCleaned
+                        } yield heldByOne && cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("releases its resource if the fiber waiting for it is interrupted") {
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          started  <- Promise.make[Nothing, Unit]
+          gate     <- Promise.make[Nothing, Unit]
+          // The lookup cannot be interrupted, so the interruption arrives while the fiber waits for it
+          lookup = ScopedLookup((_: Int) => ZIO.uninterruptible(started.succeed(()) *> gate.await *> resource.managed))
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber       <- ZIO.scoped(cache.get(1)).fork
+                          _           <- started.await
+                          _           <- cache.invalidate(1)
+                          interrupted <- fiber.interrupt.fork
+                          _           <- gate.succeed(())
+                          _           <- interrupted.join
+                          cleaned     <- resource.assertAcquiredOnceAndCleaned
+                        } yield cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("counts one hit or miss for a get that finds its value released") {
+        // Runs `onRead` once, at the next clock read after it is set
+        @volatile var onRead: () => Unit = null
+        val clock = Clock.ClockJava(new java.time.Clock {
+          override def getZone: java.time.ZoneId                         = java.time.ZoneOffset.UTC
+          override def withZone(zone: java.time.ZoneId): java.time.Clock = this
+          override def instant(): java.time.Instant = {
+            val hook = onRead
+            if (hook ne null) { onRead = null; hook() }
+            java.time.Instant.EPOCH
+          }
+        })
+        for {
+          runtime <- ZIO.runtime[Any]
+          cache = new ScopedCacheImplementation[Int, Any, Nothing, Int](
+                    10,
+                    ScopedLookup[Int, Any, Nothing, Int](key => ZIO.succeed(key)),
+                    _ => Duration.Infinity,
+                    clock,
+                    ZEnvironment.empty
+                  )
+          _ <- ZIO.scoped(cache.get(1))
+          // `get` reads the clock to check that the value has not expired: invalidate the entry before `get` acquires it
+          _ <- ZIO.succeed {
+                 onRead = () =>
+                   Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.invalidate(1)).getOrThrowFiberFailure())
+               }
+          value <- ZIO.scoped(cache.get(1))
+          stats <- cache.cacheStats
+        } yield assertTrue(value == 1, stats.hits + stats.misses == 2L)
+      } @@ TestAspect.exceptJS,
+      test("never gives a waiting fiber a released value when the entry is invalidated during the lookup") {
+        ZIO.foreach(List.range(0, 100))(_ => waiterSeesReleasedValue(invalidateAfterLookup = false)).map { results =>
+          assertTrue(!results.contains(true))
+        }
+      },
+      test("never gives a waiting fiber a released value when the entry is invalidated after the lookup") {
+        ZIO.foreach(List.range(0, 100))(_ => waiterSeesReleasedValue(invalidateAfterLookup = true)).map { results =>
+          assertTrue(!results.contains(true))
+        }
+      },
+      test("releases its resource if a refresh waiting for it is interrupted") {
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          started  <- Promise.make[Nothing, Unit]
+          gate     <- Promise.make[Nothing, Unit]
+          // The lookup cannot be interrupted, so the interruption arrives while the refresh waits for it
+          lookup = ScopedLookup((_: Int) => ZIO.uninterruptible(started.succeed(()) *> gate.await *> resource.managed))
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber       <- cache.refresh(1).fork
+                          _           <- started.await
+                          _           <- cache.invalidate(1)
+                          interrupted <- fiber.interrupt.fork
+                          _           <- gate.succeed(())
+                          _           <- interrupted.join
+                          cleaned     <- resource.assertAcquiredOnceAndCleaned
+                        } yield cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("can be interrupted while a refresh reloads an expired entry") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     calls
+                       .getAndUpdate(_ + 1)
+                       .flatMap(n => if (n == 0) ZIO.succeed(key) else started.succeed(()) *> ZIO.never)
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds).flatMap { cache =>
+                        for {
+                          _ <- ZIO.scoped(cache.get(1))
+                          // Expires between two runs of the background cleaner, which runs every second
+                          _     <- TestClock.adjust(10500.millis)
+                          fiber <- cache.refresh(1).fork
+                          _     <- started.await
+                          exit  <- fiber.interrupt.timeout(5.seconds).withClock(Clock.ClockLive)
+                        } yield assertTrue(exit.exists(_.isInterrupted))
+                      }
+                    }
+        } yield result
+      },
+      test("can be interrupted while reloading an expired entry") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     calls
+                       .getAndUpdate(_ + 1)
+                       .flatMap(n => if (n == 0) ZIO.succeed(key) else started.succeed(()) *> ZIO.never)
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds).flatMap { cache =>
+                        for {
+                          _ <- ZIO.scoped(cache.get(1))
+                          // Expires between two runs of the background cleaner, which runs every second
+                          _     <- TestClock.adjust(10500.millis)
+                          fiber <- ZIO.scoped(cache.get(1)).fork
+                          _     <- started.await
+                          exit  <- fiber.interrupt.timeout(5.seconds).withClock(Clock.ClockLive)
+                        } yield assertTrue(exit.exists(_.isInterrupted))
+                      }
+                    }
+        } yield result
+      },
+      test("releases what it acquired when it is interrupted") {
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          started  <- Promise.make[Nothing, Unit]
+          lookup    = ScopedLookup((_: Int) => resource.managed *> started.succeed(()) *> ZIO.never)
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber   <- ZIO.scoped(cache.get(1)).fork
+                          _       <- started.await
+                          _       <- fiber.interrupt
+                          cleaned <- resource.assertAcquiredOnceAndCleaned
+                        } yield cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("does not remove a newer entry when interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     calls
+                       .getAndUpdate(_ + 1)
+                       .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber <- ZIO.scoped(cache.get(1)).fork
+                          _     <- started.await
+                          _     <- cache.invalidate(1)
+                          _     <- ZIO.scoped(cache.get(1))
+                          _     <- fiber.interrupt
+                          _     <- ZIO.scoped(cache.get(1))
+                          n     <- calls.get
+                        } yield assertTrue(n == 2)
+                      }
+                    }
+        } yield result
+      },
+      test("keeps the previous value when a refresh is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: Int) =>
+                     calls
+                       .getAndUpdate(_ + 1)
+                       .flatMap(n => if (n == 1) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          _        <- ZIO.scoped(cache.get(1))
+                          fiber    <- cache.refresh(1).fork
+                          _        <- started.await
+                          _        <- fiber.interrupt
+                          contains <- cache.contains(1)
+                          _        <- ZIO.scoped(cache.get(1))
+                          n        <- calls.get
+                        } yield assertTrue(contains, n == 2)
+                      }
+                    }
+        } yield result
+      },
+      test("releases the value it replaces once") {
+        for {
+          previous <- ObservableResourceForTest.make(0)
+          next     <- ObservableResourceForTest.make(1)
+          calls    <- Ref.make(0)
+          started  <- Promise.make[Nothing, Unit]
+          gate     <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (_: Int) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       if (n == 0) previous.managed else started.succeed(()) *> gate.await *> next.managed
+                     }
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds).flatMap { cache =>
+                        for {
+                          scope   <- Scope.make
+                          _       <- cache.get(1).provideEnvironment(ZEnvironment(scope))
+                          refresh <- cache.refresh(1).fork
+                          _       <- started.await
+                          // The previous value expires, so these wait for the refresh
+                          _       <- TestClock.adjust(11.seconds)
+                          waiters <- ZIO.foreach(List(1, 2, 3))(_ => ZIO.scoped(cache.get(1)).fork)
+                          _       <- ZIO.foreachDiscard(waiters)(_.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended]))
+                          _       <- gate.succeed(())
+                          _       <- refresh.join *> ZIO.foreachDiscard(waiters)(_.join)
+                          held    <- previous.assertAcquiredOnceAndNotCleaned
+                          _       <- scope.close(Exit.unit)
+                          cleaned <- previous.assertAcquiredOnceAndCleaned
+                        } yield held && cleaned
+                      }
+                    }
+        } yield result
+      }
+    ),
+    test("contains returns true during ongoing lookup") {
+      for {
+        started <- Promise.make[Nothing, Unit]
+        promise <- Promise.make[Nothing, Int]
+        cache <-
+          ScopedCache.make(100, Duration.Infinity, ScopedLookup((_: Int) => started.succeed(()) *> promise.await))
+        _        <- ZIO.scoped(cache.get(42)).fork
+        _        <- started.await
+        contains <- cache.contains(42)
+        _        <- promise.succeed(42)
+      } yield assertTrue(contains)
+    },
+    test("get on an expired entry invalidated concurrently releases it only once") {
+      val hook  = new Hook
+      val clock = new HookedClock(hook)
+      for {
+        watchableLookup <- WatchableLookup.makeUnit
+        cache            = makeWithClock(watchableLookup.lookup, 10.seconds, clock.clock)
+        userScope       <- Scope.make
+        _               <- cache.get(()).provideEnvironment(ZEnvironment(userScope))
+        _               <- clock.adjust(11.seconds)
+        // `invalidate` runs after `get` reads the expired entry and before `get` removes it
+        _                    <- hook.arm(cache.invalidate(()))
+        _                    <- ZIO.scoped(cache.get(()))
+        firstResource        <- watchableLookup.firstCreatedResource(())
+        notCleanedWhileInUse <- firstResource.assertAcquiredOnceAndNotCleaned
+        _                    <- userScope.close(Exit.unit)
+        _                    <- cache.invalidateAll
+        allCleaned           <- watchableLookup.assertAllCleaned
+      } yield notCleanedWhileInUse && allCleaned
+    },
+    test("freeExpired keeps an entry replaced after it was found expired") {
+      val hook  = new Hook
+      val clock = new HookedClock(hook)
+      for {
+        watchableLookup <- WatchableLookup.makeUnit
+        cache            = makeWithClock(watchableLookup.lookup, 10.seconds, clock.clock)
+        _               <- ZIO.scoped(cache.get(()))
+        _               <- clock.adjust(11.seconds)
+        // `get` replaces the expired entry after `freeExpired` finds it expired and before `freeExpired` removes it
+        _                    <- hook.arm(ZIO.scoped(cache.get(())))
+        freed                <- cache.freeExpired
+        contains             <- cache.contains(())
+        firstResourceCleaned <- watchableLookup.assertFirstNCreatedResourceCleaned((), 1)
+        secondResource       <- watchableLookup.createdResources.map(_.apply(())(1))
+        secondNotCleaned     <- secondResource.assertAcquiredOnceAndNotCleaned
+        _                    <- cache.invalidateAll
+        allCleaned           <- watchableLookup.assertAllCleaned
+      } yield assertTrue(freed == 0, contains) && firstResourceCleaned && secondNotCleaned && allCleaned
+      // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+    } @@ TestAspect.exceptJS,
+    test("freeExpired releases every expired entry when it is interrupted") {
+      val clock = new HookedClock(new Hook)
+      for {
+        releasing <- Promise.make[Nothing, Unit]
+        gate      <- Promise.make[Nothing, Unit]
+        released  <- Ref.make(0)
+        lookup =
+          (key: Int) =>
+            ZIO.acquireRelease(ZIO.succeed(key))(_ => releasing.succeed(()) *> gate.await *> released.update(_ + 1))
+        cache        = makeWithClock(lookup, 10.seconds, clock.clock)
+        _           <- ZIO.foreachDiscard(List(1, 2))(key => ZIO.scoped(cache.get(key)))
+        _           <- clock.adjust(11.seconds)
+        freeExpired <- cache.freeExpired.fork
+        _           <- releasing.await
+        // Interrupted while it releases the first entry
+        _     <- freeExpired.interruptFork
+        _     <- gate.succeed(())
+        _     <- freeExpired.await
+        _     <- cache.invalidateAll
+        count <- released.get
+      } yield assertTrue(count == 2)
+    },
+    test("freeExpired releases every expired entry when a release fails") {
+      val clock = new HookedClock(new Hook)
+      for {
+        released <- Ref.make(0)
+        lookup =
+          (key: Int) =>
+            ZIO.acquireRelease(ZIO.succeed(key))(_ => released.update(_ + 1) *> ZIO.die(new RuntimeException))
+        cache  = makeWithClock(lookup, 10.seconds, clock.clock)
+        _     <- ZIO.foreachDiscard(List(1, 2))(key => ZIO.scoped(cache.get(key)))
+        _     <- clock.adjust(11.seconds)
+        exit  <- cache.freeExpired.exit
+        count <- released.get
+      } yield assertTrue(exit.isFailure, count == 2)
+    },
+    test("get evicts entries whose access was queued while another fiber was evicting") {
+      val hook    = new Hook
+      val unarmed = new Hook
+      for {
+        cache <- ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: HookedKey) => ZIO.succeed(key.id)))
+        _     <- ZIO.scoped(cache.get(HookedKey(1)(hook)))
+        _     <- ZIO.scoped(cache.get(HookedKey(2)(unarmed)))
+        // `get(4)` queues its access while `get(3)` evicts key 1, before `get(3)` finishes processing accesses
+        _    <- hook.arm(ZIO.scoped(cache.get(HookedKey(4)(unarmed))))
+        _    <- ZIO.scoped(cache.get(HookedKey(3)(unarmed)))
+        size <- cache.size
+      } yield assertTrue(size == 2)
+      // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+    } @@ TestAspect.exceptJS,
     test("ensure get is not hanging when we interrupt right after a get in another fiber") {
       val n = 100000
       for {
@@ -990,6 +1463,69 @@ object ScopedCacheSpec extends ZIOSpecDefault {
       } yield assertCompletes
     } @@ TestAspect.withLiveClock @@ TestAspect.timeout(20.seconds) @@ TestAspect.exceptJS
   )
+
+  /**
+   * Builds the cache without the background cleaner, with a capacity of 10.
+   */
+  private def makeWithClock[Key, Value](
+    lookup: Key => ZIO[Scope, Nothing, Value],
+    timeToLive: Duration,
+    clock: Clock
+  ): ScopedCacheImplementation[Key, Any, Nothing, Value] =
+    new ScopedCacheImplementation[Key, Any, Nothing, Value](
+      10,
+      ScopedLookup[Key, Any, Nothing, Value](lookup),
+      _ => timeToLive,
+      clock,
+      ZEnvironment.empty
+    )
+
+  /**
+   * Runs the armed effect, once, synchronously inside the next call to `run`,
+   * to inject a concurrent operation at an exact point of a cache operation.
+   */
+  final class Hook {
+    private val armed = new AtomicReference[UIO[Any]](null)
+
+    def arm(effect: UIO[Any]): UIO[Unit] = ZIO.succeed(armed.set(effect))
+
+    def run(): Unit = {
+      val effect = armed.getAndSet(null)
+      if (effect ne null) Unsafe.unsafe { implicit unsafe =>
+        Runtime.default.unsafe.run(effect).getOrThrowFiberFailure()
+        ()
+      }
+    }
+  }
+
+  /**
+   * A manually adjusted clock that runs `hook` every time it is read.
+   */
+  final class HookedClock(hook: Hook) {
+    @volatile private var now: Instant = Instant.EPOCH
+
+    def adjust(duration: Duration): UIO[Unit] = ZIO.succeed { now = now.plus(duration) }
+
+    val clock: Clock = Clock.ClockJava(new java.time.Clock {
+      override def getZone: ZoneId                         = ZoneOffset.UTC
+      override def withZone(zone: ZoneId): java.time.Clock = this
+      override def instant(): Instant = {
+        hook.run()
+        now
+      }
+    })
+  }
+
+  /**
+   * A key that runs `hook` every time it is hashed. Equality only depends on
+   * `id`.
+   */
+  final case class HookedKey(id: Int)(hook: Hook) {
+    override def hashCode: Int = {
+      hook.run()
+      id
+    }
+  }
 
   type Releaser = (=> Exit[Any, Any]) => UIO[Unit]
 
@@ -1256,6 +1792,36 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           }
       } yield notUsedReleasers
   }
+
+  /**
+   * Runs a lookup that a second fiber waits for, invalidates the entry during
+   * or after the lookup, and returns whether the waiting fiber was given a
+   * value whose resource was already released.
+   */
+  private def waiterSeesReleasedValue(invalidateAfterLookup: Boolean): UIO[Boolean] =
+    for {
+      started <- Promise.make[Nothing, Unit]
+      gate    <- Promise.make[Nothing, Unit]
+      // Each value is the flag that its own release sets
+      lookup = ScopedLookup { (_: Int) =>
+                 started.succeed(()) *> gate.await *> ZIO.acquireRelease(Ref.make(false))(_.set(true))
+               }
+      result <- ZIO.scoped {
+                  ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                    for {
+                      runner <- ZIO.scoped(cache.get(1)).fork
+                      _      <- started.await
+                      waiter <- ZIO.scoped(cache.get(1).flatMap(_.get)).fork
+                      _      <- waiter.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                      _      <- cache.invalidate(1).unless(invalidateAfterLookup)
+                      _      <- gate.succeed(())
+                      _      <- runner.join
+                      _      <- cache.invalidate(1).when(invalidateAfterLookup)
+                      seen   <- waiter.join
+                    } yield seen
+                  }
+                }
+    } yield result
 
   private def keyCount(cache: ScopedCache[?, ?, ?]): Int =
     cache.asInstanceOf[ScopedCacheImplementation[?, ?, ?, ?]].keyCount
