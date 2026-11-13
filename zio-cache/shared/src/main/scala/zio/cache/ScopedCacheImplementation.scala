@@ -163,9 +163,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               // Another fiber may have removed and released this entry already
               val removedByThisFiber = map.remove(k, value)
               if (removedByThisFiber) {
-                ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(get(k)))
+                ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(getValue(k, countStats)))
               } else {
-                ZIO.succeed(restore(get(k)))
+                ZIO.succeed(restore(getValue(k, countStats)))
               }
             } else {
               if (countStats) trackHit()
