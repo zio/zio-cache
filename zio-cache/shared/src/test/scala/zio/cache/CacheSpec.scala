@@ -362,6 +362,54 @@ object CacheSpec extends ZIOSpecDefault {
           _        <- cache.get(1)
           n        <- calls.get
         } yield assertTrue(contains, n == 2)
+      },
+      test("a get waiting on a lookup is not interrupted when the fiber running the lookup is") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          owner  <- cache.get(1).fork
+          _      <- started.await
+          waiter <- cache.get(1).fork
+          // The waiter counts a hit once it has read the pending entry
+          _     <- cache.cacheStats.repeatUntil(_.hits == 1L).timeout(5.seconds).withClock(Clock.ClockLive)
+          _     <- owner.interrupt
+          exit  <- waiter.await.timeout(5.seconds).withClock(Clock.ClockLive)
+          stats <- cache.cacheStats
+        } yield assertTrue(exit.contains(Exit.succeed(1)), stats.hits == 1L, stats.misses == 1L)
+      },
+      test("a get waiting for the refresh of an expired value gets a value when the refresh is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     10.seconds,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 1) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          _       <- cache.get(1)
+          refresh <- cache.refresh(1).fork
+          _       <- started.await
+          _       <- TestClock.adjust(11.seconds)
+          waiter  <- cache.get(1).fork
+          // The waiter counts a hit once it has read the refreshing entry
+          _    <- cache.cacheStats.repeatUntil(_.hits == 1L).timeout(5.seconds).withClock(Clock.ClockLive)
+          _    <- refresh.interrupt
+          exit <- waiter.await.timeout(5.seconds).withClock(Clock.ClockLive)
+          n    <- calls.get
+        } yield assertTrue(exit.contains(Exit.succeed(1)), n == 3)
       }
     )
   )
