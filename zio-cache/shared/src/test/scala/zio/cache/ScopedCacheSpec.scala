@@ -1581,6 +1581,57 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                     }
         } yield result
       },
+      test("a later get does not see the interruption of a lookup whose finalizer fails") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup((key: Int) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       if (n == 0)
+                         (started.succeed(()) *> ZIO.never).ensuring(ZIO.die(new RuntimeException("finalizer")))
+                       else ZIO.succeed(key)
+                     }
+                   )
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          owner  <- ZIO.scoped(cache.get(1)).fork
+                          _      <- started.await
+                          waiter <- ZIO.scoped(cache.get(1)).fork
+                          _ <- waiter.status
+                                 .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                                 .timeout(5.seconds)
+                                 .withClock(Clock.ClockLive)
+                          _      <- owner.interrupt
+                          waited <- waiter.await.timeout(5.seconds).withClock(Clock.ClockLive)
+                          second <- ZIO.scoped(cache.get(1)).exit
+                        } yield assertTrue(waited.contains(Exit.succeed(1)), second == Exit.succeed(1))
+                      }
+                    }
+        } yield result
+      },
+      test("a lookup that fails in parallel with an interruption caches its failure") {
+        for {
+          calls <- Ref.make(0)
+          lookup = ScopedLookup((key: Int) => calls.update(_ + 1) *> (ZIO.fail("boom") <&> ZIO.never).as(key))
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          first  <- ZIO.scoped(cache.get(1)).exit
+                          second <- ZIO.scoped(cache.get(1)).exit
+                          n      <- calls.get
+                        } yield assertTrue(
+                          // The other side of the lookup is interrupted by the fiber running the lookup, which is not
+                          // interrupted
+                          first.causeOption
+                            .exists(cause => cause.isInterrupted && cause.failureOption.contains("boom")),
+                          second.causeOption.flatMap(_.failureOption).contains("boom"),
+                          n == 1
+                        )
+                      }
+                    }
+        } yield result
+      },
       test("a get looks up its key again after an eviction it runs fails to release") {
         val lookup = ScopedLookup { (key: Int) =>
           if (key == 1) ZIO.acquireRelease(ZIO.succeed(key))(_ => ZIO.die(new RuntimeException("release")))

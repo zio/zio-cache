@@ -267,6 +267,26 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     ZIO.suspendSucceed {
       val scope   = Scope.unsafe.make(Unsafe)
       val release = scope.close(_)
+
+      def storeFailure(exit: Exit.Failure[Error]): UIO[ZIO[Scope, Error, Value]] = {
+        val now       = clock.unsafe.instant()(Unsafe)
+        val expiredAt = now.plus(timeToLive(exit))
+        val completedResult =
+          MapValue.Complete(
+            key = mapKey,
+            exit = exit,
+            ownerCount = new AtomicInteger(0),
+            entryStats = EntryStats(now),
+            timeToLive = expiredAt
+          )
+        val current          = map.get(key)
+        val isStored         = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
+        val acquire: Acquire = implicit restore => completedResult.toScoped(getAgainAfterRelease(key))
+        promise.unsafe.done(Exit.succeed(acquire))(Unsafe)
+        val replaced = if (isStored) cleanMapValue(current) else Exit.unit
+        release(exit) *> replaced.as(acquire(restore))
+      }
+
       restore(scopedLookup(key))
         .provideEnvironment(environment.unsafe.addScope(scope)(Unsafe))
         .exitWith {
@@ -291,25 +311,17 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             promise.unsafe.done(Exit.succeed(acquire))(Unsafe)
             val replaced = if (isStored) cleanMapValue(current) else Exit.unit
             replaced.as(acquire(restore))
-          case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
-            endWithoutResult(key, mapKey, promise) *> release(exit).as(exit)
+          case exit @ Exit.Failure(c) if c.isInterrupted =>
+            ZIO.descriptorWith { fiber =>
+              // The lookup has no result if it was only interrupted, or if this fiber was interrupted, even when a
+              // finalizer then failed. A lookup can also fail with the interruption of another fiber, e.g. with
+              // `zipPar`: that failure is its result.
+              val hasNoResult = c.isInterruptedOnly || fiber.interrupters.nonEmpty
+              if (hasNoResult) endWithoutResult(key, mapKey, promise) *> release(exit).as(exit)
+              else storeFailure(exit)
+            }
           case exit: Exit.Failure[Error] =>
-            val now       = clock.unsafe.instant()(Unsafe)
-            val expiredAt = now.plus(timeToLive(exit))
-            val completedResult =
-              MapValue.Complete(
-                key = mapKey,
-                exit = exit,
-                ownerCount = new AtomicInteger(0),
-                entryStats = EntryStats(now),
-                timeToLive = expiredAt
-              )
-            val current          = map.get(key)
-            val isStored         = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
-            val acquire: Acquire = implicit restore => completedResult.toScoped(getAgainAfterRelease(key))
-            promise.unsafe.done(Exit.succeed(acquire))(Unsafe)
-            val replaced = if (isStored) cleanMapValue(current) else Exit.unit
-            release(exit) *> replaced.as(acquire(restore))
+            storeFailure(exit)
         }
     }
 
