@@ -1013,6 +1013,29 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         cacheStats <- cache.cacheStats
       } yield assertTrue(cacheStats.hits == 0L, cacheStats.misses == 2L)
     },
+    test("a get that waits for the refresh of an expired entry is not counted as a hit") {
+      val clock = new HookedClock(new Hook)
+      for {
+        calls   <- Ref.make(0)
+        started <- Promise.make[Nothing, Unit]
+        gate    <- Promise.make[Nothing, Unit]
+        lookup =
+          (key: Int) => calls.getAndUpdate(_ + 1).flatMap(n => (started.succeed(()) *> gate.await).when(n == 1).as(key))
+        cache    = makeWithClock(lookup, 10.seconds, clock.clock)
+        _       <- ZIO.scoped(cache.get(1))
+        refresh <- cache.refresh(1).fork
+        _       <- started.await
+        _       <- clock.adjust(11.seconds)
+        getter  <- ZIO.scoped(cache.get(1)).fork
+        _ <- getter.status
+               .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+               .timeout(5.seconds)
+               .withClock(Clock.ClockLive)
+        _     <- gate.succeed(())
+        _     <- refresh.join *> getter.join
+        stats <- cache.cacheStats
+      } yield assertTrue(stats.hits == 0L, stats.misses == 2L)
+    },
     test("contains returns false for expired entries") {
       for {
         // Expires between two runs of the background cleaner, which runs every second

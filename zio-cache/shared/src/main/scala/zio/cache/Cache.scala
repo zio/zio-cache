@@ -219,10 +219,11 @@ object Cache {
               MapValue.Complete(mapKey, currentResult, _, ttl)
             ) =>
           trackAccess(mapKey)
-          trackHit()
           if (hasExpired(ttl)) {
+            trackMiss()
             restore(promiseInProgress.await)
           } else {
+            trackHit()
             currentResult
           }
       }

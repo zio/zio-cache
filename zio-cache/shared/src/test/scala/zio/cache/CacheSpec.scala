@@ -167,6 +167,28 @@ object CacheSpec extends ZIOSpecDefault {
       } yield assertTrue(hits == 0L) &&
         assertTrue(misses == 2L)
     },
+    test("a get that waits for the refresh of an expired entry is not counted as a hit") {
+      for {
+        calls   <- Ref.make(0)
+        started <- Promise.make[Nothing, Unit]
+        gate    <- Promise.make[Nothing, Unit]
+        lookup =
+          (key: Int) => calls.getAndUpdate(_ + 1).flatMap(n => (started.succeed(()) *> gate.await).when(n == 1).as(key))
+        cache   <- Cache.make(100, 10.seconds, Lookup(lookup))
+        _       <- cache.get(1)
+        refresh <- cache.refresh(1).fork
+        _       <- started.await
+        _       <- TestClock.adjust(11.seconds)
+        getter  <- cache.get(1).fork
+        _ <- getter.status
+               .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+               .timeout(5.seconds)
+               .withClock(Clock.ClockLive)
+        _     <- gate.succeed(())
+        _     <- refresh.join *> getter.join
+        stats <- cache.cacheStats
+      } yield assertTrue(stats.hits == 0L, stats.misses == 2L)
+    },
     suite("`contains` method")(
       test("should return false for expired entries") {
         for {

@@ -172,10 +172,11 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               ensureMapSizeNotExceeded(key).as(complete.toScoped(getAgainAfterRelease(k)))
             }
           case MapValue.Refreshing(promiseInProgress, complete @ MapValue.Complete(mapKey, _, _, _, ttl)) =>
-            if (countStats) trackHit()
             if (hasExpired(ttl)) {
+              if (countStats) trackMiss()
               ensureMapSizeNotExceeded(mapKey) *> promiseInProgress
             } else {
+              if (countStats) trackHit()
               ensureMapSizeNotExceeded(mapKey).as(complete.toScoped(getAgainAfterRelease(k)))
             }
         }
