@@ -24,6 +24,7 @@ import java.time.{Duration, Instant}
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
 import scala.annotation.tailrec
+import scala.util.control.NonFatal
 
 /**
  * A `Cache` is defined in terms of a lookup function that, given a key of
@@ -198,9 +199,8 @@ object Cache {
 
       value match {
         case null =>
-          trackAccess(key)
           trackMiss()
-          lookupValueOf(in, k, key, promise)
+          trackAccessAndLookUp(in, k, key, promise)
         case MapValue.Pending(key, promise) =>
           trackAccess(key)
           trackHit()
@@ -240,8 +240,7 @@ object Cache {
         }
         (value match {
           case null =>
-            trackAccess(key)
-            lookupValueOf(in, k, key, promise)
+            trackAccessAndLookUp(in, k, key, promise)
           case MapValue.Pending(_, promiseInProgress) =>
             restore(promiseInProgress.await)
           case completedResult @ MapValue.Complete(_, _, _, ttl) =>
@@ -270,6 +269,23 @@ object Cache {
 
     private[cache] def keyCount: Int =
       keys.size
+
+    /**
+     * Tracks the access to the entry this call added, then runs its lookup.
+     * Other calls wait for the lookup's result, so it runs even if the
+     * eviction fails, and this call then dies with the eviction's failure.
+     */
+    private def trackAccessAndLookUp(in: In, key: Key, mapKey: MapKey[Key], promise: Promise[Error, Value])(implicit
+      restore: ZIO.InterruptibilityRestorer
+    ): IO[Error, Value] = {
+      val lookupValue = lookupValueOf(in, key, mapKey, promise)
+      try {
+        trackAccess(mapKey)
+        lookupValue
+      } catch {
+        case NonFatal(e) => lookupValue.exitWith(_ => Exit.die(e))
+      }
+    }
 
     private def lookupValueOf(in: In, key: Key, mapKey: MapKey[Key], promise: Promise[Error, Value])(implicit
       restore: ZIO.InterruptibilityRestorer
@@ -318,10 +334,11 @@ object Cache {
       def tryStartProcessingAccesses(): Boolean =
         !accesses.isEmpty() && updating.compareAndSet(false, true)
 
-      accesses.offer(key)
-      // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again.
-      // A fiber that loses the race returns: its access is queued, and the fiber holding `updating` processes it.
-      while (tryStartProcessingAccesses()) {
+      // Read again before each removal, as another fiber can remove an entry during the eviction
+      def overCapacity: Boolean =
+        map.size > capacity
+
+      def processAccesses(): Unit = {
         var loop = true
         while (loop) {
           val key = accesses.poll(null)
@@ -331,38 +348,42 @@ object Cache {
             loop = false
           }
         }
-        var size = map.size
+        val size = map.size
         // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
         val tooManyStaleKeys = keys.size > 2 * size
         if (tooManyStaleKeys) keys.retain(isLive)
         loop = size > capacity
         while (loop) {
-          val key = keys.remove()
+          // A key leaves the set only once its entry is gone, so an eviction that throws starts again from it
+          val key = keys.first
           if (key ne null) {
-            if (removeEntryOf(key)) {
-              size -= 1
-              loop = size > capacity
+            val value = map.get(key.value)
+            if (!isEntryOf(key, value)) {
+              keys.remove()
+            } else if (overCapacity) {
+              // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key: if so, read it again
+              if (map.remove(key.value, value)) {
+                keys.remove()
+                loop = overCapacity
+              }
+            } else {
+              loop = false
             }
           } else {
             loop = false
           }
         }
-        updating.set(false)
       }
-    }
 
-    /**
-     * Removes the entry tracked by `key`, if the map still holds it, and
-     * returns whether it was removed.
-     */
-    private def removeEntryOf(key: MapKey[Key]): Boolean = {
-      def changedBeforeRemove(value: MapValue[Key, Error, Value]): Boolean =
-        isEntryOf(key, value) && !map.remove(key.value, value)
-
-      var value = map.get(key.value)
-      // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so the remove is retried
-      while (changedBeforeRemove(value)) value = map.get(key.value)
-      isEntryOf(key, value)
+      accesses.offer(key)
+      // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again.
+      // A fiber that loses the race returns: its access is queued, and the fiber holding `updating` processes it.
+      while (tryStartProcessingAccesses()) {
+        // Reset even if a key's `hashCode` or `equals` throws: this call then dies, and the next one processes the
+        // accesses still queued
+        try processAccesses()
+        finally updating.set(false)
+      }
     }
 
     private def isLive(key: MapKey[Key]): Boolean =

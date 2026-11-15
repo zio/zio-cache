@@ -259,7 +259,44 @@ object CacheSpec extends ZIOSpecDefault {
           completed <- cache.get(new HookKey(3)).disconnect.timeout(10.seconds).map(_.isDefined)
           size      <- cache.size
         } yield assertTrue(completed, size == 2)
-      } @@ TestAspect.withLiveClock
+      } @@ TestAspect.withLiveClock,
+      test("keeps evicting after a key's hashCode throws during an eviction") {
+        for {
+          cache <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          one    = new HookKey(1)
+          three  = new HookKey(3)
+          _     <- cache.get(one) *> cache.get(new HookKey(2))
+          // The eviction triggered by the next get hashes `one` first
+          _     <- ZIO.succeed(one.onHash(1)(throw new RuntimeException("hashCode")))
+          first <- cache.get(three).exit
+          // The get that died still ran its lookup, which the other gets of the key wait for
+          again <- cache.get(three).timeout(10.seconds)
+          _     <- ZIO.foreachDiscard(4 to 10)(i => cache.get(new HookKey(i)))
+          size  <- cache.size
+        } yield assertTrue(first.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode")) &&
+          assertTrue(again.contains(3), size == 2)
+      } @@ TestAspect.withLiveClock,
+      test("does not evict an entry when an invalidation during the eviction makes room") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          cache   <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          one      = new HookKey(1)
+          two      = new HookKey(2)
+          three    = new HookKey(3)
+          _       <- cache.get(one) *> cache.get(two)
+          // The eviction triggered by the next get hashes `one` to read its entry: invalidate `two` from there
+          _ <- ZIO.succeed(one.onHash(1) {
+                 Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.invalidate(two)).getOrThrowFiberFailure())
+               })
+          _      <- cache.get(three)
+          size   <- cache.size
+          hasOne <- cache.contains(one)
+          // `one` is still the least recently used entry
+          _          <- cache.get(new HookKey(4))
+          stillOne   <- cache.contains(one)
+          stillThree <- cache.contains(three)
+        } yield assertTrue(size == 2, hasOne, !stillOne, stillThree)
+      }
     ),
     suite("lookup in progress")(
       test("does not store its result if the entry is invalidated") {
