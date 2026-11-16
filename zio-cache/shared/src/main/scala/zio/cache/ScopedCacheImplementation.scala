@@ -145,21 +145,17 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     restore(getValue(k, countStats = false))
 
   /**
-   * What a lookup without a result gives the fibers waiting for it. Each of
-   * them then gets the value again with its own interruptibility.
+   * The result of a lookup, which each fiber acquires with its own `restore`:
+   * a fiber that finds the value released gets it again with its own
+   * interruptibility, not with that of the fiber that ran the lookup.
    */
-  private val noResult: ZIO[Scope, Error, Value] = ZIO.dieMessage("A lookup without a result has no value")
-
-  private def getAgainIfNoResult(k: Key)(scoped: ZIO[Scope, Error, Value])(implicit
-    restore: ZIO.InterruptibilityRestorer
-  ): ZIO[Scope, Error, Value] =
-    if (scoped eq noResult) getAgainAfterRelease(k) else scoped
+  private type Acquire = ZIO.InterruptibilityRestorer => ZIO[Scope, Error, Value]
 
   private def getValue(k: Key, countStats: Boolean): ZIO[Scope, Error, Value] =
     ZIO.uninterruptibleMask { implicit restore =>
-      var newKey: MapKey[Key]                                 = null
-      var promise: Promise[Nothing, ZIO[Scope, Error, Value]] = null
-      var value                                               = map.get(k)
+      var newKey: MapKey[Key]                = null
+      var promise: Promise[Nothing, Acquire] = null
+      var value                              = map.get(k)
       if (value eq null) {
         newKey = new MapKey(k)
         promise = newPromise()
@@ -175,7 +171,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
         case MapValue.Pending(key, scoped) =>
           if (countStats) trackHit()
           // Only the wait is interruptible: a fiber that stops waiting acquires nothing
-          ensureMapSizeNotExceeded(key) *> restore(scoped).map(getAgainIfNoResult(k))
+          ensureMapSizeNotExceeded(key) *> restore(scoped).map(acquire => acquire(restore))
         case complete @ MapValue.Complete(key, _, _, _, timeToLive) =>
           if (hasExpired(timeToLive)) {
             // Another fiber may have removed and released this entry already
@@ -192,7 +188,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
         case MapValue.Refreshing(promiseInProgress, complete @ MapValue.Complete(mapKey, _, _, _, ttl)) =>
           if (countStats) trackHit()
           if (hasExpired(ttl)) {
-            ensureMapSizeNotExceeded(mapKey) *> restore(promiseInProgress).map(getAgainIfNoResult(k))
+            ensureMapSizeNotExceeded(mapKey) *> restore(promiseInProgress).map(acquire => acquire(restore))
           } else {
             ensureMapSizeNotExceeded(mapKey).as(complete.toScoped(getAgainAfterRelease(k)))
           }
@@ -217,7 +213,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
           case null =>
             (ensureMapSizeNotExceeded(newKey) *> scoped).onError(_ => endWithoutResult(k, newKey, promise))
           case MapValue.Pending(_, scopedEffect) =>
-            scopedEffect.map(getAgainIfNoResult(k))
+            scopedEffect.map(acquire => acquire(restore))
           case completeResult @ MapValue.Complete(_, _, _, _, ttl) =>
             if (hasExpired(ttl)) {
               ZIO.succeed(restore(get(k)))
@@ -228,7 +224,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
                 ZIO.succeed(restore(get(k)))
               }
             }
-          case MapValue.Refreshing(scoped, _) => scoped.map(getAgainIfNoResult(k))
+          case MapValue.Refreshing(scoped, _) => scoped.map(acquire => acquire(restore))
         }
         finalScoped.flatMap(s => ZIO.scoped(s.unit))
       }
@@ -265,7 +261,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
    * its result to the fibers waiting for it with `promise`, before releasing
    * anything.
    */
-  private def lookupValueOf(key: Key, mapKey: MapKey[Key], promise: Promise[Nothing, ZIO[Scope, Error, Value]])(implicit
+  private def lookupValueOf(key: Key, mapKey: MapKey[Key], promise: Promise[Nothing, Acquire])(implicit
     restore: ZIO.InterruptibilityRestorer
   ): UIO[ZIO[Scope, Error, Value]] =
     ZIO.suspendSucceed {
@@ -289,12 +285,12 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               )
             val current  = map.get(key)
             val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
-            val scoped =
-              if (isStored) completedResult.toScoped(getAgainAfterRelease(key))
-              else toScopedUncached(completedResult)(getAgainAfterRelease(key))
-            promise.unsafe.done(Exit.succeed(scoped))(Unsafe)
+            val acquire: Acquire =
+              if (isStored) { implicit restore => completedResult.toScoped(getAgainAfterRelease(key)) }
+              else toScopedUncached(key, completedResult)
+            promise.unsafe.done(Exit.succeed(acquire))(Unsafe)
             val replaced = if (isStored) cleanMapValue(current) else Exit.unit
-            replaced.as(scoped)
+            replaced.as(acquire(restore))
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
             endWithoutResult(key, mapKey, promise) *> release(exit).as(exit)
           case exit: Exit.Failure[Error] =>
@@ -308,12 +304,12 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
                 entryStats = EntryStats(now),
                 timeToLive = expiredAt
               )
-            val current  = map.get(key)
-            val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
-            val scoped   = completedResult.toScoped(getAgainAfterRelease(key))
-            promise.unsafe.done(Exit.succeed(scoped))(Unsafe)
+            val current          = map.get(key)
+            val isStored         = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
+            val acquire: Acquire = implicit restore => completedResult.toScoped(getAgainAfterRelease(key))
+            promise.unsafe.done(Exit.succeed(acquire))(Unsafe)
             val replaced = if (isStored) cleanMapValue(current) else Exit.unit
-            release(exit) *> replaced.as(scoped)
+            release(exit) *> replaced.as(acquire(restore))
         }
     }
 
@@ -326,31 +322,31 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   private def endWithoutResult(
     key: Key,
     mapKey: MapKey[Key],
-    promise: Promise[Nothing, ZIO[Scope, Error, Value]]
+    promise: Promise[Nothing, Acquire]
   ): UIO[Unit] =
     ZIO.succeed {
       // Only undo the entry this lookup belongs to, not one added after an invalidation
       val current = map.get(key)
       if (isEntryOf(mapKey, current)) undoLookup(key, current)
-      promise.unsafe.done(Exit.succeed(noResult))(Unsafe)
+      val getAgain: Acquire = implicit restore => getAgainAfterRelease(key)
+      promise.unsafe.done(Exit.succeed(getAgain))(Unsafe)
     }
 
   private def newPromise() =
-    Promise.unsafe.make[Nothing, ZIO[Scope, Error, Value]](FiberId.None)(Unsafe)
+    Promise.unsafe.make[Nothing, Acquire](FiberId.None)(Unsafe)
 
   /**
    * Returns the value of a lookup whose entry was invalidated or evicted while
    * it ran. Every fiber waiting for the lookup acquires the value, and the
    * cache releases its own share once the first one has.
    */
-  private def toScopedUncached(complete: MapValue.Complete[Key, Error, Value])(
-    ifReleased: => ZIO[Scope, Error, Value]
-  ): ZIO[Scope, Error, Value] = {
+  private def toScopedUncached(key: Key, complete: MapValue.Complete[Key, Error, Value]): Acquire = {
     val cacheShareReleased = new AtomicBoolean(false)
-    complete.toScoped(ifReleased).tap { _ =>
-      val isFirst = cacheShareReleased.compareAndSet(false, true)
-      if (isFirst) complete.releaseOwner else Exit.unit
-    }
+    implicit restore =>
+      complete.toScoped(getAgainAfterRelease(key)).tap { _ =>
+        val isFirst = cacheShareReleased.compareAndSet(false, true)
+        if (isFirst) complete.releaseOwner else Exit.unit
+      }
   }
 
   /**
@@ -398,7 +394,7 @@ object ScopedCacheImplementation {
   private object MapValue {
     final case class Pending[Key, Error, Value](
       key: MapKey[Key],
-      scoped: UIO[ZIO[Scope, Error, Value]]
+      scoped: UIO[ZIO.InterruptibilityRestorer => ZIO[Scope, Error, Value]]
     ) extends MapValue[Key, Error, Value]
 
     final case class Complete[Key, +Error, +Value](
@@ -448,7 +444,7 @@ object ScopedCacheImplementation {
     }
 
     final case class Refreshing[Key, Error, Value](
-      scopedEffect: UIO[ZIO[Scope, Error, Value]],
+      scopedEffect: UIO[ZIO.InterruptibilityRestorer => ZIO[Scope, Error, Value]],
       complete: Complete[Key, Error, Value]
     ) extends MapValue[Key, Error, Value] {
       def key: MapKey[Key] = complete.key
