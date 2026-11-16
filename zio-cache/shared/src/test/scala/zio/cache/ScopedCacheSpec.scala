@@ -1716,6 +1716,12 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                     }
         } yield result
       },
+      test("a refresh that is interrupted and whose release then dies does not undo a later refresh") {
+        refreshWithoutResultWhoseReleaseDies(selfInterrupt = false).map(most => assertTrue(most == 1))
+      },
+      test("a refresh that interrupts itself and whose release then dies does not undo a later refresh") {
+        refreshWithoutResultWhoseReleaseDies(selfInterrupt = true).map(most => assertTrue(most == 1))
+      },
       test("a get looks up its key again after an eviction it runs fails to release") {
         val lookup = ScopedLookup { (key: Int) =>
           if (key == 1) ZIO.acquireRelease(ZIO.succeed(key))(_ => ZIO.die(new RuntimeException("release")))
@@ -2230,6 +2236,61 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           }
       } yield notUsedReleasers
   }
+
+  /**
+   * A refresh whose lookup has no result, because its fiber is interrupted or
+   * the lookup interrupts itself, and whose release then dies. Returns the
+   * largest number of lookups of the key that run at the same time.
+   */
+  private def refreshWithoutResultWhoseReleaseDies(selfInterrupt: Boolean): ZIO[Any, Nothing, Int] =
+    for {
+      calls      <- Ref.make(0)
+      started    <- Promise.make[Nothing, Unit]
+      finStarted <- Promise.make[Nothing, Unit]
+      finGate    <- Promise.make[Nothing, Unit]
+      startedF   <- Promise.make[Nothing, Unit]
+      gateF      <- Promise.make[Nothing, Unit]
+      inFlight   <- Ref.make(0)
+      most       <- Ref.make(0)
+      lookup = ScopedLookup((_: Int) =>
+                 (inFlight.updateAndGet(_ + 1).flatMap(n => most.update(math.max(_, n))) *>
+                   calls.updateAndGet(_ + 1).flatMap {
+                     case 1 => ZIO.succeed("v1")
+                     case 2 =>
+                       ZIO.addFinalizer(
+                         finStarted.succeed(()) *> finGate.await *> ZIO.die(new RuntimeException("boom"))
+                       ) *> started.succeed(()) *> (if (selfInterrupt) ZIO.interrupt else ZIO.never)
+                     case 3 => startedF.succeed(()) *> gateF.await.as("old")
+                     case _ => ZIO.succeed("new")
+                   }).ensuring(inFlight.update(_ - 1))
+               )
+      result <- ZIO.scoped {
+                  ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                    for {
+                      _ <- ZIO.scoped(cache.get(1))
+                      // R's lookup has no result: R undoes its Refreshing, then releases the lookup, which blocks
+                      r <- cache.refresh(1).exit.fork
+                      _ <- started.await
+                      _ <- if (selfInterrupt) ZIO.unit else r.interruptFork
+                      _ <- finStarted.await
+                      // F replaces the restored value with its Refreshing and starts lookup 3
+                      f <- cache.refresh(1).fork
+                      _ <- startedF.await
+                      // The release of R's lookup dies, and R's onError must leave F's Refreshing alone
+                      _ <- finGate.succeed(())
+                      _ <- r.await
+                      w <- cache.refresh(1).fork
+                      _ <- w.status
+                             .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                             .timeout(5.seconds)
+                             .withClock(Clock.ClockLive)
+                      _ <- gateF.succeed(())
+                      _ <- f.join *> w.join
+                      m <- most.get
+                    } yield m
+                  }
+                }
+    } yield result
 
   /**
    * Runs a lookup that a second fiber waits for, invalidates the entry during
