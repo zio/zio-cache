@@ -1029,12 +1029,14 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         getter  <- ZIO.scoped(cache.get(1)).fork
         _ <- getter.status
                .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
-               .timeout(5.seconds)
+               .timeoutFail("the get does not wait for the refresh")(5.seconds)
                .withClock(Clock.ClockLive)
         _     <- gate.succeed(())
-        _     <- refresh.join *> getter.join
+        _     <- refresh.join
+        value <- getter.join
+        count <- calls.get
         stats <- cache.cacheStats
-      } yield assertTrue(stats.hits == 0L, stats.misses == 2L)
+      } yield assertTrue(value == 1, count == 2, stats.hits == 0L, stats.misses == 2L)
     },
     test("contains returns false for expired entries") {
       for {
