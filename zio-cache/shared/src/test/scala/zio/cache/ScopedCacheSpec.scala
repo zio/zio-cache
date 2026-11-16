@@ -1450,6 +1450,28 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                     }
         } yield result
       },
+      test("a lookup whose key fails when its result is stored and when its entry is undone releases its resource") {
+        val key = new HookKey(1)
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          lookup = ScopedLookup { (key: HookKey) =>
+                     // The next hash of the key stores the result, and the one after it undoes the entry
+                     val failNextTwoHashes = ZIO.succeed(key.onHash(1) {
+                       key.onHash(1)(throw new RuntimeException("hash code failed again"))
+                       throw new RuntimeException("hash code failed")
+                     })
+                     resource.managed <* failNextTwoHashes
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          first   <- ZIO.scoped(cache.get(key)).exit
+                          cleaned <- resource.assertAcquiredOnceAndCleaned
+                        } yield assertTrue(first.isFailure) && cleaned
+                      }
+                    }
+        } yield result
+      },
       test("an interrupted lookup whose key fails when its entry is undone releases its resource") {
         val key = new HookKey(1)
         for {
