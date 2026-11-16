@@ -238,13 +238,16 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     }
   }.uninterruptible
 
-  // `foreachPar` counts the keys before it iterates them, so it is given a copy that cannot change in between. A key or
-  // a release that fails must not stop the others, so every key is invalidated before the failures are reported.
-  override def invalidateAll: UIO[Unit] =
+  // A key or a release that fails must not stop the others, so every key is invalidated before the failures are
+  // reported. Uninterruptible, like `invalidate`: an interruption waits until the keys read are invalidated, so that
+  // their failures are reported.
+  override def invalidateAll: UIO[Unit] = ZIO.suspendSucceed {
+    // `foreachPar` counts the keys before it iterates them, so it is given a copy that cannot change in between
     ZIO
       .foreachPar(map.keySet().asScala.toList)(invalidate(_).exit)
       .flatMap(exits => Exit.collectAllPar(exits).getOrElse(Exit.unit))
       .unit
+  }.uninterruptible
 
   override def size: UIO[Int] =
     ZIO.succeed(map.size)

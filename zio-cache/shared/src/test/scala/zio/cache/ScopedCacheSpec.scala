@@ -920,7 +920,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           logged = logs.count(entry => entry.logLevel == LogLevel.Error && entry.cause.dieOption.contains(failure))
         } yield assertTrue(count == 1, size == 0, logged == 1)
       },
-      test("releases the expired entries it removed when a key fails once") {
+      test("releases the expired entries it removed when a key fails once, and logs the failure") {
         val one = new ThrowingKey(1)
         val two = new ThrowingKey(2)
         for {
@@ -939,7 +939,9 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           afterCleaner <- released.get
           _            <- scope.close(Exit.unit)
           afterClose   <- released.get
-        } yield assertTrue(afterCleaner == Set(1), afterClose == Set(1, 2))
+          logs         <- ZTestLogger.logOutput
+          logged        = logs.count(entry => entry.logLevel == LogLevel.Error && entry.cause.dieOption.contains(two.failure))
+        } yield assertTrue(afterCleaner == Set(1), afterClose == Set(1, 2), logged == 1)
       },
       test("releases the expired entries it removed when a key keeps failing") {
         val zero = new ThrowingKey(0)
@@ -1583,7 +1585,7 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                   }
       } yield result
     },
-    test("invalidateAll releases every other entry when a key fails") {
+    test("invalidateAll releases every other entry when a key fails, and fails with the failure of the key") {
       val keys = (1 to 20).toList.map(new ThrowingKey(_))
       for {
         released <- Ref.make(0)
@@ -1592,20 +1594,77 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                  }
         result <- ZIO.scoped {
                     ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
-                      val round = for {
-                        _      <- ZIO.foreachDiscard(keys)(key => ZIO.scoped(cache.get(key)))
-                        before <- released.get
-                        _      <- ZIO.succeed(keys.head.throwing.set(true))
-                        _      <- cache.invalidateAll.exit
-                        _      <- ZIO.succeed(keys.head.throwing.set(false))
-                        after  <- released.get
-                      } yield after - before
-                      // The other keys are only skipped if the failing one ends before they start, so the race is tried
-                      // several times
-                      ZIO.foreach(1 to 100)(_ => round).map(counts => assertTrue(counts.count(_ != 19) == 0))
+                      for {
+                        _ <- ZIO.foreachDiscard(keys)(key => ZIO.scoped(cache.get(key)))
+                        _ <- ZIO.succeed(keys.head.throwing.set(true))
+                        // One key at a time, so that the failing key, first in iteration order, ends before the others
+                        exit  <- cache.invalidateAll.withParallelism(1).exit
+                        _     <- ZIO.succeed(keys.head.throwing.set(false))
+                        count <- released.get
+                      } yield assertTrue(count == 19, exit.causeOption.exists(_.defects.contains(keys.head.failure)))
                     }
                   }
       } yield result
+    },
+    test("invalidateAll releases every other entry when a release dies, and fails with the failure of the release") {
+      val failure = new RuntimeException("release failed")
+      for {
+        released <- Ref.make(0)
+        lookup = ScopedLookup { (key: Int) =>
+                   ZIO.acquireRelease(ZIO.succeed(key))(_ => released.update(_ + 1) *> ZIO.die(failure).when(key == 1))
+                 }
+        result <- ZIO.scoped {
+                    ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                      for {
+                        _     <- ZIO.foreachDiscard(1 to 20)(key => ZIO.scoped(cache.get(key)))
+                        exit  <- cache.invalidateAll.withParallelism(1).exit
+                        count <- released.get
+                        size  <- cache.size
+                      } yield assertTrue(count == 20, size == 0, exit.causeOption.exists(_.defects.contains(failure)))
+                    }
+                  }
+      } yield result
+    },
+    test("invalidateAll invalidates the entries present when it runs, not when it is built") {
+      for {
+        released <- Ref.make(0)
+        lookup    = ScopedLookup((key: Int) => ZIO.acquireRelease(ZIO.succeed(key))(_ => released.update(_ + 1)))
+        result <- ZIO.scoped {
+                    ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                      val invalidateAll = cache.invalidateAll
+                      for {
+                        _     <- ZIO.scoped(cache.get(1)) *> ZIO.scoped(cache.get(2))
+                        _     <- invalidateAll
+                        size  <- cache.size
+                        count <- released.get
+                      } yield assertTrue(size == 0, count == 2)
+                    }
+                  }
+      } yield result
+    },
+    test("an interrupted invalidateAll fails with the failure of a release") {
+      val failure = new RuntimeException("release failed")
+      for {
+        releasing <- Promise.make[Nothing, Unit]
+        gate      <- Promise.make[Nothing, Unit]
+        started   <- Ref.make(0)
+        lookup = ScopedLookup { (key: Int) =>
+                   ZIO.acquireRelease(ZIO.succeed(key)) { _ =>
+                     // Both releases run when `invalidateAll` is interrupted
+                     started.updateAndGet(_ + 1).flatMap(n => releasing.succeed(()).when(n == 2)) *>
+                       gate.await *> ZIO.die(failure).when(key == 1)
+                   }
+                 }
+        scope <- Scope.make
+        cache <- ScopedCache.make(100, Duration.Infinity, lookup).provideEnvironment(ZEnvironment(scope))
+        _     <- ZIO.scoped(cache.get(1)) *> ZIO.scoped(cache.get(2))
+        all   <- cache.invalidateAll.fork
+        _     <- releasing.await
+        _     <- all.interruptFork
+        _     <- gate.succeed(())
+        exit  <- all.await
+        _     <- scope.close(Exit.unit)
+      } yield assertTrue(exit.causeOption.exists(_.defects.contains(failure)))
     },
     test("invalidateAll completes when entries are invalidated while it runs") {
       val keys = (1 to 10).toList
@@ -1697,14 +1756,15 @@ object ScopedCacheSpec extends ZIOSpecDefault {
   }
 
   /**
-   * A key whose hash code throws while `throwing` is set. Equality only
-   * depends on `id`.
+   * A key whose hash code throws `failure` while `throwing` is set. Equality
+   * only depends on `id`.
    */
   final class ThrowingKey(val id: Int) {
     val throwing = new AtomicBoolean(false)
+    val failure  = new RuntimeException(s"hash code of $id failed")
 
     override def hashCode: Int = {
-      if (throwing.get) throw new RuntimeException(s"hash code of $id failed")
+      if (throwing.get) throw failure
       id
     }
 
