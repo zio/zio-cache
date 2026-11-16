@@ -278,6 +278,20 @@ object CacheSpec extends ZIOSpecDefault {
         } yield assertTrue(first.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode")) &&
           assertTrue(again.contains(3), size == 2, !hasOne)
       } @@ TestAspect.withLiveClock,
+      test("drops a key whose hashCode throws once its entry is gone") {
+        def evictsAfter(remove: (Cache[HookKey, Nothing, Int], HookKey) => UIO[Unit]) =
+          for {
+            cache <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+            one    = new HookKey(1)
+            _     <- cache.get(one) *> cache.get(new HookKey(2))
+            _     <- remove(cache, one)
+            // `one` still tracks the entry removed above
+            _     <- ZIO.succeed(one.throwOnEveryHash())
+            exits <- ZIO.foreach((3 to 20).toList)(i => cache.get(new HookKey(i)).exit)
+            size  <- cache.size
+          } yield assertTrue(exits.forall(_.isSuccess), size == 2)
+        evictsAfter((cache, _) => cache.invalidateAll).zipWith(evictsAfter(_.invalidate(_)))(_ && _)
+      },
       test("keeps its capacity when a key's hashCode always throws during evictions") {
         for {
           cache <- Cache.make(2, Duration.Infinity, Lookup((key: EvictionThrowingKey) => ZIO.succeed(key.id)))

@@ -1053,6 +1053,24 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           stats <- cache.cacheStats
         } yield assertTrue(again.isFailure, ids == List(1), stats.hits == 0L, stats.misses == 4L)
       } @@ TestAspect.jvmOnly,
+      test("drops a key whose hashCode throws once its entry is gone") {
+        def evictsAfter(remove: (ScopedCache[HookKey, Nothing, Int], HookKey) => UIO[Unit]) =
+          ZIO.scoped {
+            ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap {
+              cache =>
+                val one = new HookKey(1)
+                for {
+                  _ <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(new HookKey(2)))
+                  _ <- remove(cache, one)
+                  // `one` still tracks the entry removed above
+                  _     <- ZIO.succeed(one.throwOnEveryHash())
+                  exits <- ZIO.foreach((3 to 20).toList)(i => ZIO.scoped(cache.get(new HookKey(i))).exit)
+                  size  <- cache.size
+                } yield assertTrue(exits.forall(_.isSuccess), size == 2)
+            }
+          }
+        evictsAfter((cache, _) => cache.invalidateAll).zipWith(evictsAfter(_.invalidate(_)))(_ && _)
+      },
       test("keeps its capacity when a key's hashCode always throws during evictions") {
         ZIO.scoped {
           ScopedCache

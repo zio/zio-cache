@@ -29,12 +29,22 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     def overCapacity: Boolean =
       map.size > capacity
 
-    // A key whose `hashCode` or `equals` throws is kept, and moved last in eviction order so that the eviction goes on
-    // with the other keys. This call then dies with the exception.
+    // A key whose `hashCode` or `equals` throws is dropped if its entry is gone, as nothing is left to evict. Otherwise
+    // it is kept, and moved last in eviction order so that the eviction goes on with the other keys, and this call then
+    // dies with the exception.
     def processAccesses(): Unit = {
       var failure: Throwable = null
 
-      // Kept without dying: the eviction reaches the key in turn, and dies there
+      // Whether the map holds the entry tracked by `key`, without hashing it. An entry never comes back under its key
+      // once it is gone, so `false` stays `false`.
+      def holdsEntryOf(key: MapKey[Key]): Boolean = {
+        val values = map.values().iterator()
+        var found  = false
+        while (!found && values.hasNext) found = values.next().key eq key
+        found
+      }
+
+      // Kept without dying: the eviction reaches the key in turn, and handles it there
       def isLiveOrThrows(key: MapKey[Key]): Boolean =
         try isLive(key)
         catch {
@@ -78,10 +88,14 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             }
           } catch {
             case e: Throwable if isNonFatal(e) =>
-              // Moves the key last
-              keys.add(key)
-              failure = e
-              if (firstThrowing eq null) firstThrowing = key
+              if (holdsEntryOf(key)) {
+                // Moves the key last
+                keys.add(key)
+                failure = e
+                if (firstThrowing eq null) firstThrowing = key
+              } else {
+                keys.remove()
+              }
           }
         } else {
           loop = false
