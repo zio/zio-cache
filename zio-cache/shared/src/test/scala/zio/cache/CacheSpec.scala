@@ -135,6 +135,181 @@ object CacheSpec extends ZIOSpecDefault {
             count1 <- cache.size
           } yield assertTrue(count0 == 0) && assertTrue(count1 == cap)
         }
+      },
+      test("stores a value read after refresh is called when a lookup is in progress") {
+        for {
+          store   <- Ref.make("old")
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((_: Int) =>
+                       calls.updateAndGet(_ + 1).flatMap { n =>
+                         store.get.flatMap(v => if (n == 1) started.succeed(()) *> gate.await.as(v) else ZIO.succeed(v))
+                       }
+                     )
+                   )
+          getter    <- cache.get(1).fork
+          _         <- started.await
+          _         <- store.set("new")
+          refresher <- cache.refresh(1).fork
+          _ <- refresher.status
+                 .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          _     <- gate.succeed(())
+          _     <- getter.join *> refresher.join
+          value <- cache.get(1)
+        } yield assertTrue(value == "new")
+      },
+      test("can be interrupted while it waits for a lookup in progress") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((_: Int) => calls.updateAndGet(_ + 1) *> started.succeed(()) *> ZIO.never)
+                   )
+          _         <- cache.get(1).fork
+          _         <- started.await
+          refresher <- cache.refresh(1).fork
+          _ <- refresher.status
+                 .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          exit     <- refresher.interrupt.timeout(5.seconds).withClock(Clock.ClockLive)
+          contains <- cache.contains(1)
+          n        <- calls.get
+        } yield assertTrue(exit.exists(_.isInterrupted), contains, n == 1)
+      },
+      test("waits for the value of a refresh that starts its lookup first") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((_: HookKey) =>
+                       calls
+                         .updateAndGet(_ + 1)
+                         .flatMap(n => if (n == 2) started.succeed(()) *> gate.await.as(n) else ZIO.succeed(n))
+                     )
+                   )
+          one = new HookKey(1)
+          _  <- cache.get(one)
+          // `refresh` hashes `one` to read its entry, then again to replace it: another refresh starts its lookup in
+          // between
+          _ <- ZIO.succeed(one.onHash(2) {
+                 Unsafe.unsafe { implicit unsafe =>
+                   runtime.unsafe.run(cache.refresh(one).forkDaemon *> started.await).getOrThrowFiberFailure()
+                 }
+               })
+          refresher <- cache.refresh(one).fork
+          _ <- refresher.status
+                 .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          done  <- refresher.poll.map(_.isDefined)
+          _     <- gate.succeed(())
+          _     <- refresher.join
+          value <- cache.get(one)
+          n     <- calls.get
+        } yield assertTrue(!done, value == 2, n == 2)
+        // The hook waits for the other refresh to start its lookup, which JS cannot do
+      } @@ TestAspect.exceptJS,
+      test("runs its own lookup when the lookup of the refresh it waits for is interrupted") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          other   <- Promise.make[Nothing, Fiber.Runtime[Nothing, Unit]]
+          cache <-
+            Cache.make(
+              100,
+              Duration.Infinity,
+              Lookup((_: HookKey) =>
+                calls.updateAndGet(_ + 1).flatMap(n => if (n == 2) started.succeed(()) *> ZIO.never else ZIO.succeed(n))
+              )
+            )
+          one = new HookKey(1)
+          _  <- cache.get(one)
+          // `refresh` hashes `one` to read its entry, then again to replace it: another refresh starts its lookup in
+          // between
+          _ <- ZIO.succeed(one.onHash(2) {
+                 Unsafe.unsafe { implicit unsafe =>
+                   runtime.unsafe
+                     .run(cache.refresh(one).forkDaemon.flatMap(other.succeed) *> started.await)
+                     .getOrThrowFiberFailure()
+                 }
+               })
+          refresher <- cache.refresh(one).fork
+          _ <- refresher.status
+                 .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          _     <- other.await.flatMap(_.interrupt)
+          exit  <- refresher.join.exit
+          value <- cache.get(one)
+        } yield assertTrue(exit == Exit.unit, value == 3)
+        // The hook waits for the other refresh to start its lookup, which JS cannot do
+      } @@ TestAspect.exceptJS,
+      test("runs its own lookup when the refresh it waits for is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <-
+            Cache.make(
+              100,
+              Duration.Infinity,
+              Lookup((_: Int) =>
+                calls.updateAndGet(_ + 1).flatMap(n => if (n == 2) started.succeed(()) *> ZIO.never else ZIO.succeed(n))
+              )
+            )
+          _      <- cache.get(1)
+          first  <- cache.refresh(1).fork
+          _      <- started.await
+          second <- cache.refresh(1).fork
+          _ <- second.status
+                 .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          _     <- first.interrupt
+          _     <- second.join
+          value <- cache.get(1)
+        } yield assertTrue(value == 3)
+      },
+      test("does not count a hit or miss when it refreshes again after waiting for a lookup") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          lookup = Lookup((_: Int) =>
+                     calls.updateAndGet(_ + 1).flatMap { n =>
+                       if (n == 1) started.succeed(()) *> gate.await *> ZIO.fail("failure") else ZIO.succeed(n)
+                     }
+                   )
+          // A failure expires at once, so the refresh finds it expired when it refreshes again
+          cache <- Cache.makeWith(100, lookup) {
+                     case Exit.Success(_) => Duration.Infinity
+                     case Exit.Failure(_) => Duration.fromNanos(-1)
+                   }
+          getter    <- cache.get(1).fork
+          _         <- started.await
+          refresher <- cache.refresh(1).fork
+          _ <- refresher.status
+                 .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          _     <- gate.succeed(())
+          _     <- getter.join.exit *> refresher.join
+          stats <- cache.cacheStats
+          n     <- calls.get
+        } yield assertTrue(stats.hits == 0L, stats.misses == 1L, n == 2)
       }
     ),
     test("size") {

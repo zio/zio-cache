@@ -59,6 +59,8 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * Force the reuse of the lookup function to compute the returned scoped effect associated with the specified key immediately
    * Once the new resource is recomputed, the old resource associated to the key is cleaned (once all fiber using it are done with it)
    * During the time the new resource is computed, concurrent call the .get will use the old resource if this one is not expired
+   * A lookup already in progress when refresh is called is waited for, then the lookup runs again
+   * A lookup started by another fiber after the call is used instead, once it has stored its value
    * @param key
    * @return
    */
