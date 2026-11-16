@@ -1642,29 +1642,29 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                   }
       } yield result
     },
-    test("an interrupted invalidateAll fails with the failure of a release") {
+    test("an interrupted invalidateAll invalidates every key it read, and fails with the failure of a release") {
       val failure = new RuntimeException("release failed")
       for {
         releasing <- Promise.make[Nothing, Unit]
         gate      <- Promise.make[Nothing, Unit]
-        started   <- Ref.make(0)
         lookup = ScopedLookup { (key: Int) =>
                    ZIO.acquireRelease(ZIO.succeed(key)) { _ =>
-                     // Both releases run when `invalidateAll` is interrupted
-                     started.updateAndGet(_ + 1).flatMap(n => releasing.succeed(()).when(n == 2)) *>
-                       gate.await *> ZIO.die(failure).when(key == 1)
+                     if (key == 1) releasing.succeed(()) *> gate.await else ZIO.die(failure)
                    }
                  }
         scope <- Scope.make
         cache <- ScopedCache.make(100, Duration.Infinity, lookup).provideEnvironment(ZEnvironment(scope))
         _     <- ZIO.scoped(cache.get(1)) *> ZIO.scoped(cache.get(2))
-        all   <- cache.invalidateAll.fork
-        _     <- releasing.await
-        _     <- all.interruptFork
-        _     <- gate.succeed(())
-        exit  <- all.await
-        _     <- scope.close(Exit.unit)
-      } yield assertTrue(exit.causeOption.exists(_.defects.contains(failure)))
+        // One key at a time: key 1 comes first in iteration order, and the invalidation of key 2 has not started when
+        // `invalidateAll` is interrupted
+        all  <- cache.invalidateAll.withParallelism(1).fork
+        _    <- releasing.await
+        _    <- all.interruptFork
+        _    <- gate.succeed(())
+        exit <- all.await
+        size <- cache.size
+        _    <- scope.close(Exit.unit)
+      } yield assertTrue(exit.causeOption.exists(c => c.isInterrupted && c.defects == List(failure)), size == 0)
     },
     test("invalidateAll completes when entries are invalidated while it runs") {
       val keys = (1 to 10).toList
