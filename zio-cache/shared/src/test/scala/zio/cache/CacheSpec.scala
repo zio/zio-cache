@@ -278,6 +278,36 @@ object CacheSpec extends ZIOSpecDefault {
         } yield assertTrue(first.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode")) &&
           assertTrue(again.contains(3), size == 2, !hasOne)
       } @@ TestAspect.withLiveClock,
+      test("drops a key whose hashCode throws once its entry is gone, while under capacity") {
+        for {
+          cache <- Cache.make(100, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          _ <- ZIO.foreachDiscard(1 to 50) { i =>
+                 val key = new HookKey(i)
+                 cache.get(key) *> cache.invalidate(key) *> ZIO.succeed(key.throwOnEveryHash())
+               }
+          exits <- ZIO.foreach((1 to 4).toList)(_ => cache.get(new HookKey(1000)).exit)
+          size  <- cache.size
+        } yield assertTrue(exits.forall(_.isSuccess), size == 1, keyCount(cache) <= 3)
+      },
+      test("processes the accesses queued while an eviction throws") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          cache   <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          one      = new HookKey(1)
+          _       <- cache.get(one) *> cache.get(new HookKey(2))
+          // The eviction triggered by the next get hashes `one` first: two gets run from there and leave their access
+          // to it, then `one` throws
+          _ <- ZIO.succeed(one.onHash(1) {
+                 Unsafe.unsafe { implicit unsafe =>
+                   runtime.unsafe.run(cache.get(new HookKey(5))).getOrThrowFiberFailure()
+                   runtime.unsafe.run(cache.get(new HookKey(6))).getOrThrowFiberFailure()
+                 }
+                 throw new RuntimeException("hashCode")
+               })
+          third <- cache.get(new HookKey(3)).exit
+          size  <- cache.size
+        } yield assertTrue(third.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode"), size == 2)
+      },
       test("drops a key whose hashCode throws once its entry is gone") {
         def evictsAfter(remove: (Cache[HookKey, Nothing, Int], HookKey) => UIO[Unit]) =
           for {

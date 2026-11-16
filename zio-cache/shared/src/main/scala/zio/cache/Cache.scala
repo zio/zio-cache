@@ -340,12 +340,13 @@ object Cache {
       def overCapacity: Boolean =
         map.size > capacity
 
+      // The exception of a key whose `hashCode` or `equals` throws while its entry is still in the map
+      var failure: Throwable = null
+
       // A key whose `hashCode` or `equals` throws is dropped if its entry is gone, as nothing is left to evict. Otherwise
       // it is kept, and moved last in eviction order so that the eviction goes on with the other keys, and this call then
       // dies with the exception.
       def processAccesses(): Unit = {
-        var failure: Throwable = null
-
         // Whether the map holds the entry tracked by `key`, without hashing it. An entry never comes back under its key
         // once it is gone, so `false` stays `false`.
         def holdsEntryOf(key: MapKey[Key]): Boolean = {
@@ -355,11 +356,11 @@ object Cache {
           found
         }
 
-        // Kept without dying: the eviction reaches the key in turn, and handles it there
+        // A key kept here because its entry is still there: the eviction reaches it in turn
         def isLiveOrThrows(key: MapKey[Key]): Boolean =
           try isLive(key)
           catch {
-            case e: Throwable if isNonFatal(e) => true
+            case e: Throwable if isNonFatal(e) => holdsEntryOf(key)
           }
 
         var loop = true
@@ -411,17 +412,18 @@ object Cache {
             loop = false
           }
         }
-        if (failure ne null) throw failure
       }
 
       accesses.offer(key)
       // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again.
       // A fiber that loses the race returns: its access is queued, and the fiber holding `updating` processes it.
       while (tryStartProcessingAccesses()) {
-        // Reset even if the eviction throws: this call then dies, and the next one processes the accesses still queued
+        // Reset even if a fatal error is thrown
         try processAccesses()
         finally updating.set(false)
       }
+      // Only once the accesses queued meanwhile are processed
+      if (failure ne null) throw failure
     }
 
     // What ZIO turns into a defect
