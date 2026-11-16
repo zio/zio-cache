@@ -428,6 +428,40 @@ object CacheSpec extends ZIOSpecDefault {
           n     <- calls.get
         } yield assertTrue(diedWith("hash code failed")(first), next.contains(1), n == 2)
       } @@ TestAspect.withLiveClock,
+      test("a get whose key throws when its result is stored and when its entry is undone completes its waiters") {
+        val key = new HookKey(1)
+        for {
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          calls   <- Ref.make(0)
+          lookup = Lookup { (key: HookKey) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       // The next hash of the key stores the result, and the one after it undoes the entry
+                       val failNextTwoHashes = ZIO.succeed(key.onHash(1) {
+                         key.onHash(1)(throw new RuntimeException("hash code failed again"))
+                         throw new RuntimeException("hash code failed")
+                       })
+                       if (n == 0) started.succeed(()) *> gate.await *> failNextTwoHashes.as(key.id)
+                       else ZIO.succeed(key.id)
+                     }
+                   }
+          cache      <- Cache.make(100, Duration.Infinity, lookup)
+          first      <- cache.get(key).exit.fork
+          _          <- started.await
+          waiter     <- cache.get(key).exit.fork
+          _          <- waiter.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+          _          <- gate.succeed(())
+          firstExit  <- first.join.timeout(5.seconds)
+          waiterExit <- waiter.join.timeout(5.seconds)
+          // The entry could not be undone, so it is invalidated
+          _     <- cache.invalidate(key)
+          after <- cache.get(key).timeout(5.seconds)
+        } yield assertTrue(
+          firstExit.exists(_.isFailure),
+          waiterExit.exists(diedWith("hash code failed")),
+          after.contains(1)
+        )
+      } @@ TestAspect.withLiveClock,
       test("an interrupted get whose key throws when its entry is undone lets the next get look the key up again") {
         val key = new HookKey(1)
         for {
