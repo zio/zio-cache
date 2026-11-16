@@ -294,7 +294,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             val current  = map.get(key)
             val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
             val replaced = if (isStored) cleanMapValue(current) else Exit.unit
-            release(exit) *> replaced.as(completedResult.toScoped(getAgainAfterRelease(key)))
+            // The value this failure replaces is released even if a finalizer of the failed lookup fails
+            release(exit).ensuring(replaced).as(completedResult.toScoped(getAgainAfterRelease(key)))
         }
 
       restore(scopedLookup(key))

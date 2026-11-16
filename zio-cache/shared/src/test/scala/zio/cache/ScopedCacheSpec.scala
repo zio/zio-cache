@@ -1350,6 +1350,26 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                       }
                     }
         } yield result
+      },
+      test("a refresh whose lookup fails and whose finalizer dies releases the previous value") {
+        for {
+          previous <- ObservableResourceForTest.make(1)
+          calls    <- Ref.make(0)
+          lookup = ScopedLookup { (_: Int) =>
+                     val failWithDyingFinalizer =
+                       ZIO.addFinalizer(ZIO.die(new RuntimeException("finalizer failed"))) *> ZIO.fail("lookup failed")
+                     calls.getAndUpdate(_ + 1).flatMap(n => if (n == 0) previous.managed else failWithDyingFinalizer)
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          _         <- ZIO.scoped(cache.get(1))
+                          refreshed <- cache.refresh(1).exit
+                          cleaned   <- previous.assertAcquiredOnceAndCleaned
+                        } yield assertTrue(refreshed.isFailure) && cleaned
+                      }
+                    }
+        } yield result
       }
     ),
     suite("time to live or key that throws")(
