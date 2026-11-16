@@ -75,7 +75,10 @@ abstract class Cache[-Key, +Error, +Value] {
    * without invalidating it in the cache, so any request to the associated
    * key can still be served while the value is being re-computed/retrieved
    * by the lookup function. Additionally, `refresh` always triggers the
-   * lookup function, disregarding the last `Error`.
+   * lookup function, disregarding the last `Error`. A lookup already in
+   * progress when `refresh` is called is waited for, then the lookup runs
+   * again; a lookup started by another fiber after the call is used instead,
+   * once it has stored its value.
    */
   def refresh(key: Key): IO[Error, Unit]
 
@@ -233,33 +236,64 @@ object Cache {
 
     override def refresh(in: In): IO[Error, Unit] =
       ZIO.uninterruptibleMask { implicit restore =>
-        val k                = keyBy(in)
-        val promise          = newPromise()
-        var key: MapKey[Key] = null
-        var value            = map.get(k)
-        if (value eq null) {
-          key = new MapKey(k)
-          value = map.putIfAbsent(k, MapValue.Pending(key, promise))
-        }
-        (value match {
-          case null =>
-            trackAccess(key)
-            lookupValueOf(in, k, key, promise)
-          case MapValue.Pending(_, promiseInProgress) =>
-            restore(promiseInProgress.await)
-          case completedResult @ MapValue.Complete(_, _, _, ttl) =>
-            if (hasExpired(ttl)) {
-              map.remove(k, value)
-              getUnsafe(in, countStats = true)
-            } else {
-              // Only trigger the lookup if we're still the current value, `completedResult`
-              lookupValueOf(in, k, completedResult.key, promise).whenDiscard {
-                map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
+        val k           = keyBy(in)
+        val valueAtCall = map.get(k)
+
+        // Only the retries of `refresh` read the entry again, and they do not count a hit or miss
+        def refreshValue(current: MapValue[Key, Error, Value], countStats: Boolean): IO[Error, Unit] = {
+          val promise          = newPromise()
+          var key: MapKey[Key] = null
+          var value            = current
+          if (value eq null) {
+            key = new MapKey(k)
+            value = map.putIfAbsent(k, MapValue.Pending(key, promise))
+          }
+
+          // A lookup in progress when `refresh` is called may have read the data before the call, so `refresh` waits
+          // for it and then refreshes again. A lookup started after the call gives the result of `refresh`, once it is
+          // stored: what the fibers waiting for a lookup get does not tell whether it stored its result.
+          def waitForLookup(promiseInProgress: Promise[Error, Value]): IO[Error, Unit] =
+            restore(promiseInProgress.await.exit).flatMap { _ =>
+              val latest = map.get(k)
+              val stored = latest match {
+                case complete @ MapValue.Complete(_, _, _, _) => complete
+                case MapValue.Refreshing(_, complete)         => complete
+                case null | _: MapValue.Pending[?, ?, ?]      => null
               }
+              val refreshed = value match {
+                case MapValue.Refreshing(_, complete)                             => complete
+                case _: MapValue.Pending[?, ?, ?] | _: MapValue.Complete[?, ?, ?] => null
+              }
+              // A key added after the call only has values looked up after it
+              val storedWithNewKey = (stored ne null) && ((valueAtCall eq null) || (stored.key ne valueAtCall.key))
+              // Only the lookup, and the refreshes of its result, store a value with its key other than the one it
+              // refreshes
+              val storedByLookup = (value ne valueAtCall) && isEntryOf(value.key, stored) && (stored ne refreshed)
+              if (storedWithNewKey || storedByLookup) stored.exit.unit else refreshValue(latest, countStats = false)
             }
-          case MapValue.Refreshing(promiseInProgress, _) =>
-            restore(promiseInProgress.await)
-        }).unit
+
+          value match {
+            case null =>
+              trackAccess(key)
+              lookupValueOf(in, k, key, promise).unit
+            case MapValue.Pending(_, promiseInProgress) =>
+              waitForLookup(promiseInProgress)
+            case completedResult @ MapValue.Complete(_, _, _, ttl) =>
+              if (hasExpired(ttl)) {
+                map.remove(k, value)
+                getUnsafe(in, countStats).unit
+              } else {
+                val startsLookup = map.replace(k, completedResult, MapValue.Refreshing(promise, completedResult))
+                // Otherwise another fiber changed the entry first
+                if (startsLookup) lookupValueOf(in, k, completedResult.key, promise).unit
+                else refreshValue(map.get(k), countStats = false)
+              }
+            case MapValue.Refreshing(promiseInProgress, _) =>
+              waitForLookup(promiseInProgress)
+          }
+        }
+
+        refreshValue(valueAtCall, countStats = true)
       }
 
     override def invalidate(in: In)(implicit trace: Trace): UIO[Unit] =
