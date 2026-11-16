@@ -410,6 +410,31 @@ object CacheSpec extends ZIOSpecDefault {
           exit <- waiter.await.timeout(5.seconds).withClock(Clock.ClockLive)
           n    <- calls.get
         } yield assertTrue(exit.contains(Exit.succeed(1)), n == 3)
+      },
+      test("a refresh waiting on a lookup whose fiber is interrupted loads the value") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          owner   <- cache.get(1).fork
+          _       <- started.await
+          refresh <- cache.refresh(1).fork
+          _ <- refresh.status
+                 .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          _     <- owner.interrupt
+          exit  <- refresh.await.timeout(5.seconds).withClock(Clock.ClockLive)
+          value <- cache.get(1)
+        } yield assertTrue(exit.contains(Exit.unit), value == 1)
       }
     )
   )
