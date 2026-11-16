@@ -436,6 +436,31 @@ object CacheSpec extends ZIOSpecDefault {
           value <- cache.get(1)
         } yield assertTrue(exit.contains(Exit.unit), value == 1)
       },
+      test("the fibers waiting for a lookup that interrupts itself get its interruption, which is not cached") {
+        for {
+          calls <- Ref.make(0)
+          gate  <- Promise.make[Nothing, Unit]
+          cache <-
+            Cache.make(100, Duration.Infinity, Lookup((_: Int) => calls.update(_ + 1) *> gate.await *> ZIO.interrupt))
+          owner   <- cache.get(1).fork
+          _       <- calls.get.repeatUntil(_ == 1).timeout(5.seconds).withClock(Clock.ClockLive)
+          waiters <- ZIO.foreach((1 to 4).toList)(_ => cache.get(1).fork)
+          // Each waiter counts a hit once it has read the pending entry
+          _        <- cache.cacheStats.repeatUntil(_.hits == 4L).timeout(5.seconds).withClock(Clock.ClockLive)
+          _        <- gate.succeed(())
+          exits    <- ZIO.foreach(owner :: waiters)(_.await).timeout(5.seconds).withClock(Clock.ClockLive)
+          lookups  <- calls.get
+          contains <- cache.contains(1)
+          next     <- cache.get(1).exit
+          after    <- calls.get
+        } yield assertTrue(
+          exits.exists(_.forall(_.isInterrupted)),
+          lookups == 1,
+          !contains,
+          next.isInterrupted,
+          after == 2
+        )
+      },
       test("a later get does not see the interruption of a lookup whose finalizer fails") {
         for {
           calls   <- Ref.make(0)

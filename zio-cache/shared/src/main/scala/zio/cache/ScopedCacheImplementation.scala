@@ -313,11 +313,13 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             replaced.as(acquire(restore))
           case exit @ Exit.Failure(c) if c.isInterrupted =>
             ZIO.descriptorWith { fiber =>
-              // The lookup has no result if it was only interrupted, or if this fiber was interrupted, even when a
-              // finalizer then failed. A lookup can also fail with the interruption of another fiber, e.g. with
-              // `zipPar`: that failure is its result.
-              val hasNoResult = c.isInterruptedOnly || fiber.interrupters.nonEmpty
-              if (hasNoResult) endWithoutResult(key, mapKey, promise) *> release(exit).as(exit)
+              // The interruption of this fiber is not the lookup's result, even when a finalizer then failed: the
+              // fibers waiting for the lookup get the value again. A lookup that is only interrupted otherwise, e.g.
+              // with `ZIO.interrupt`, gives them its exit, which is not cached. Any other failure, e.g. a `zipPar`
+              // whose other side is interrupted, is the lookup's result.
+              val wasInterrupted = fiber.interrupters.nonEmpty
+              if (wasInterrupted) endWithoutResult(key, mapKey, promise) *> release(exit).as(exit)
+              else if (c.isInterruptedOnly) endUncached(key, mapKey, promise, _ => exit) *> release(exit).as(exit)
               else storeFailure(exit)
             }
           case exit: Exit.Failure[Error] =>
@@ -327,21 +329,32 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
 
   /**
    * Ends a lookup without a result: its fiber was interrupted, or died before
-   * the lookup ended. Undoes its entry, then lets the fibers waiting for it get
-   * the value again. The entry is undone first, so that they do not wait for
-   * this lookup again.
+   * the lookup ended. The fibers waiting for it get the value again.
    */
   private def endWithoutResult(
     key: Key,
     mapKey: MapKey[Key],
     promise: Promise[Nothing, Acquire]
   ): UIO[Unit] =
+    endUncached(key, mapKey, promise, implicit restore => getAgainAfterRelease(key))
+
+  /**
+   * Ends a lookup whose exit is not cached: undoes its entry, then gives
+   * `forWaiters` to the fibers waiting for it. The entry is undone first, so
+   * that a fiber that gets the value again does not wait for this lookup
+   * again.
+   */
+  private def endUncached(
+    key: Key,
+    mapKey: MapKey[Key],
+    promise: Promise[Nothing, Acquire],
+    forWaiters: Acquire
+  ): UIO[Unit] =
     ZIO.succeed {
       // Only undo the entry this lookup belongs to, not one added after an invalidation
       val current = map.get(key)
       if (isEntryOf(mapKey, current)) undoLookup(key, current)
-      val getAgain: Acquire = implicit restore => getAgainAfterRelease(key)
-      promise.unsafe.done(Exit.succeed(getAgain))(Unsafe)
+      promise.unsafe.done(Exit.succeed(forWaiters))(Unsafe)
     }
 
   private def newPromise() =

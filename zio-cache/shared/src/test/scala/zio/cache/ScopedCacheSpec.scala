@@ -1501,11 +1501,43 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                                  .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
                                  .timeout(5.seconds)
                                  .withClock(Clock.ClockLive)
+                          // The owner is interrupted, and its lookup then ends with an interruption: it has no result
+                          _           <- owner.interruptFork
                           _           <- gate.succeed(())
                           _           <- owner.await
                           retried     <- started2.await.timeout(5.seconds).withClock(Clock.ClockLive)
                           interrupted <- waiter.interrupt.timeout(2.seconds).withClock(Clock.ClockLive)
                         } yield assertTrue(retried.isDefined, interrupted.exists(_.isInterrupted))
+                      }
+                    }
+        } yield result
+      },
+      test("the fibers waiting for a lookup that interrupts itself get its interruption, which is not cached") {
+        for {
+          calls <- Ref.make(0)
+          gate  <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup((_: Int) => calls.update(_ + 1) *> gate.await *> ZIO.interrupt)
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          owner   <- ZIO.scoped(cache.get(1)).fork
+                          _       <- calls.get.repeatUntil(_ == 1).timeout(5.seconds).withClock(Clock.ClockLive)
+                          waiters <- ZIO.foreach((1 to 4).toList)(_ => ZIO.scoped(cache.get(1)).fork)
+                          // Each waiter counts a hit once it has read the pending entry
+                          _        <- cache.cacheStats.repeatUntil(_.hits == 4L).timeout(5.seconds).withClock(Clock.ClockLive)
+                          _        <- gate.succeed(())
+                          exits    <- ZIO.foreach(owner :: waiters)(_.await).timeout(5.seconds).withClock(Clock.ClockLive)
+                          lookups  <- calls.get
+                          contains <- cache.contains(1)
+                          next     <- ZIO.scoped(cache.get(1)).exit
+                          after    <- calls.get
+                        } yield assertTrue(
+                          exits.exists(_.forall(_.isInterrupted)),
+                          lookups == 1,
+                          !contains,
+                          next.isInterrupted,
+                          after == 2
+                        )
                       }
                     }
         } yield result

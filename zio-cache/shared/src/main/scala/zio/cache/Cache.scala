@@ -277,14 +277,13 @@ object Cache {
     private def lookupValueOf(in: In, key: Key, mapKey: MapKey[Key], promise: Promise[Error, Value])(implicit
       restore: ZIO.InterruptibilityRestorer
     ): IO[Error, Value] = {
-      def withoutResult(exit: Exit[Error, Value]): IO[Error, Value] = {
+      def uncached(exit: Exit[Error, Value], forWaiters: IO[Error, Value]): IO[Error, Value] = {
         // Only undo the entry this lookup belongs to, not one added after an invalidation
         val current = map.get(key)
         if (isEntryOf(mapKey, current)) undoLookup(key, current)
-        // The fibers waiting for the lookup get the value again, without counting it twice. The entry is undone
-        // first, so that they do not wait for this lookup again.
-        val getAgain = ZIO.uninterruptibleMask(implicit restore => getUnsafe(in, countStats = false))
-        promise.unsafe.completeWith(getAgain)(Unsafe)
+        // The entry is undone first, so that a fiber waiting for the lookup that gets the value again does not wait
+        // for this lookup again
+        promise.unsafe.completeWith(forWaiters)(Unsafe)
         exit
       }
 
@@ -305,11 +304,15 @@ object Cache {
         .exitWith {
           case exit @ Exit.Failure(c) if c.isInterrupted =>
             ZIO.descriptorWith { fiber =>
-              // The lookup has no result if it was only interrupted, or if this fiber was interrupted, even when a
-              // finalizer then failed. A lookup can also fail with the interruption of another fiber, e.g. with
-              // `zipPar`: that failure is its result.
-              val hasNoResult = c.isInterruptedOnly || fiber.interrupters.nonEmpty
-              if (hasNoResult) withoutResult(exit) else withResult(exit)
+              // The interruption of this fiber is not the lookup's result, even when a finalizer then failed: the
+              // fibers waiting for the lookup get the value again, without counting it twice. A lookup that is only
+              // interrupted otherwise, e.g. with `ZIO.interrupt`, gives them its exit, which is not cached. Any other
+              // failure, e.g. a `zipPar` whose other side is interrupted, is the lookup's result.
+              val wasInterrupted = fiber.interrupters.nonEmpty
+              if (wasInterrupted)
+                uncached(exit, ZIO.uninterruptibleMask(implicit restore => getUnsafe(in, countStats = false)))
+              else if (c.isInterruptedOnly) uncached(exit, exit)
+              else withResult(exit)
             }
           case exit => withResult(exit)
         }
