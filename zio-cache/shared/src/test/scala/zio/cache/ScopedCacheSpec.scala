@@ -9,6 +9,7 @@ import zio.{
   Exit,
   Fiber,
   IO,
+  LogLevel,
   Promise,
   Ref,
   Runtime,
@@ -861,6 +862,62 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                       }
                     }
         } yield result
+      },
+      test("keeps running after a release fails, and logs the failure") {
+        val failure = new RuntimeException("release failed")
+        for {
+          released <- Ref.make(Set.empty[Int])
+          lookup = ScopedLookup { (key: Int) =>
+                     ZIO.acquireRelease(ZIO.succeed(key)) { _ =>
+                       released.update(_ + key) *> ZIO.die(failure).when(key == 1)
+                     }
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds).flatMap { cache =>
+                        for {
+                          _    <- ZIO.scoped(cache.get(1))
+                          _    <- TestClock.adjust(11.seconds)
+                          _    <- ZIO.scoped(cache.get(2))
+                          _    <- TestClock.adjust(11.seconds)
+                          size <- cache.size
+                          keys <- released.get
+                          logs <- ZTestLogger.logOutput
+                          logged = logs.count(entry =>
+                                     entry.logLevel == LogLevel.Error && entry.cause.dieOption.contains(failure)
+                                   )
+                        } yield assertTrue(keys == Set(1, 2), size == 0, logged == 1)
+                      }
+                    }
+        } yield result
+      },
+      test("stops when the cache is closed while it releases an entry, and logs the failure of the release") {
+        val failure = new RuntimeException("release failed")
+        for {
+          releasing <- Promise.make[Nothing, Unit]
+          gate      <- Promise.make[Nothing, Unit]
+          released  <- Ref.make(0)
+          lookup = ScopedLookup { (key: Int) =>
+                     ZIO.acquireRelease(ZIO.succeed(key)) { _ =>
+                       releasing.succeed(()) *> gate.await *> released.update(_ + 1) *> ZIO.die(failure)
+                     }
+                   }
+          scope <- Scope.make
+          cache <- ScopedCache
+                     .makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds)
+                     .provideEnvironment(ZEnvironment(scope))
+          _ <- ZIO.scoped(cache.get(1))
+          _ <- TestClock.adjust(11.seconds)
+          _ <- releasing.await
+          // Closing the cache interrupts the cleaner while it releases the expired entry
+          close <- scope.close(Exit.unit).fork
+          _     <- close.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+          _     <- gate.succeed(())
+          _     <- close.join
+          count <- released.get
+          size  <- cache.size
+          logs  <- ZTestLogger.logOutput
+          logged = logs.count(entry => entry.logLevel == LogLevel.Error && entry.cause.dieOption.contains(failure))
+        } yield assertTrue(count == 1, size == 0, logged == 1)
       }
     ),
     suite("property base testing")(
