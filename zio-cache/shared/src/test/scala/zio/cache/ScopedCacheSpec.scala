@@ -910,7 +910,8 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           _ <- releasing.await
           // Closing the cache interrupts the cleaner while it releases the expired entry
           close <- scope.close(Exit.unit).fork
-          _     <- close.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+          // Not `Suspended` only: a cleaner that could be interrupted during the release would let the close end first
+          _     <- close.status.repeatUntil(status => !status.isInstanceOf[Fiber.Status.Running])
           _     <- gate.succeed(())
           _     <- close.join
           count <- released.get
