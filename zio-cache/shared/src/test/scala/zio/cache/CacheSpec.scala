@@ -164,6 +164,37 @@ object CacheSpec extends ZIOSpecDefault {
           value <- cache.get(1)
         } yield assertTrue(value == "new")
       },
+      test("stores a value read after refresh is called when a refresh is in progress") {
+        for {
+          store   <- Ref.make("v0")
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((_: Int) =>
+                       calls.updateAndGet(_ + 1).flatMap { n =>
+                         store.get.flatMap(v => if (n == 2) started.succeed(()) *> gate.await.as(v) else ZIO.succeed(v))
+                       }
+                     )
+                   )
+          _      <- cache.get(1)
+          _      <- store.set("v1")
+          first  <- cache.refresh(1).fork
+          _      <- started.await
+          _      <- store.set("v2")
+          second <- cache.refresh(1).fork
+          _ <- second.status
+                 .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          _     <- gate.succeed(())
+          _     <- first.join *> second.join
+          value <- cache.get(1)
+          n     <- calls.get
+        } yield assertTrue(value == "v2", n == 3)
+      },
       test("can be interrupted while it waits for a lookup in progress") {
         for {
           calls   <- Ref.make(0)
