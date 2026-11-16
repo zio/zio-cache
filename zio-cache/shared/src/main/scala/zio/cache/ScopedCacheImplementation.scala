@@ -225,10 +225,12 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               case MapValue.Refreshing(_, complete)                                    => complete
               case null | _: MapValue.Pending[?, ?, ?] | _: MapValue.Complete[?, ?, ?] => null
             }
+            // A key added after the call only has values looked up after it
+            val storedWithNewKey = (stored ne null) && ((valueAtCall eq null) || (stored.key ne valueAtCall.key))
             // Only the lookup, and the refreshes of its result, store a value with its key other than the one it
             // refreshes
-            val storedAfterCall = (current ne valueAtCall) && isEntryOf(current.key, stored) && (stored ne refreshed)
-            if (storedAfterCall) stored.exit.unit else refreshValue(latest, countStats = false)
+            val storedByLookup = (current ne valueAtCall) && isEntryOf(current.key, stored) && (stored ne refreshed)
+            if (storedWithNewKey || storedByLookup) stored.exit.unit else refreshValue(latest, countStats = false)
           }
 
         // Another fiber can store an entry after `map.get`: its lookup has another key, so start again from it

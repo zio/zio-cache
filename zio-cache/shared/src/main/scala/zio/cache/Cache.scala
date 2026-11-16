@@ -264,10 +264,12 @@ object Cache {
                 case MapValue.Refreshing(_, complete)                             => complete
                 case _: MapValue.Pending[?, ?, ?] | _: MapValue.Complete[?, ?, ?] => null
               }
+              // A key added after the call only has values looked up after it
+              val storedWithNewKey = (stored ne null) && ((valueAtCall eq null) || (stored.key ne valueAtCall.key))
               // Only the lookup, and the refreshes of its result, store a value with its key other than the one it
               // refreshes
-              val storedAfterCall = (value ne valueAtCall) && isEntryOf(value.key, stored) && (stored ne refreshed)
-              if (storedAfterCall) stored.exit.unit else refreshValue(latest, countStats = false)
+              val storedByLookup = (value ne valueAtCall) && isEntryOf(value.key, stored) && (stored ne refreshed)
+              if (storedWithNewKey || storedByLookup) stored.exit.unit else refreshValue(latest, countStats = false)
             }
 
           value match {

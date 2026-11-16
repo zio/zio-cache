@@ -310,7 +310,43 @@ object CacheSpec extends ZIOSpecDefault {
           stats <- cache.cacheStats
           n     <- calls.get
         } yield assertTrue(stats.hits == 0L, stats.misses == 1L, n == 2)
-      }
+      },
+      test("uses the value of a lookup started after it is called when the fiber running it is interrupted") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          other   <- Promise.make[Nothing, Fiber.Runtime[Nothing, Int]]
+          cache <-
+            Cache.make(
+              100,
+              Duration.Infinity,
+              Lookup((_: HookKey) =>
+                calls.updateAndGet(_ + 1).flatMap(n => if (n == 1) started.succeed(()) *> ZIO.never else ZIO.succeed(n))
+              )
+            )
+          one = new HookKey(1)
+          // `refresh` hashes `one` to read its entry, then again to insert one: a `get` inserts its entry in between
+          _ <- ZIO.succeed(one.onHash(2) {
+                 Unsafe.unsafe { implicit unsafe =>
+                   runtime.unsafe
+                     .run(cache.get(one).forkDaemon.flatMap(other.succeed) *> started.await)
+                     .getOrThrowFiberFailure()
+                 }
+               })
+          refresher <- cache.refresh(one).fork
+          _ <- refresher.status
+                 .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          // The refresh gets the value again in its own fiber, with a lookup started after it was called
+          _     <- other.await.flatMap(_.interrupt)
+          exit  <- refresher.join.exit
+          value <- cache.get(one)
+          n     <- calls.get
+        } yield assertTrue(exit == Exit.unit, value == 2, n == 2)
+        // The hook waits for the `get` to start its lookup, which JS cannot do
+      } @@ TestAspect.exceptJS
     ),
     test("size") {
       check(Gen.int) { salt =>

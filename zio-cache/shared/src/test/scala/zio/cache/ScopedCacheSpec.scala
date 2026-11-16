@@ -712,6 +712,29 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                       }
                     }
         } yield result
+      },
+      test("can be interrupted while it waits for a lookup in progress") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          lookup   = ScopedLookup((_: Int) => calls.updateAndGet(_ + 1) *> started.succeed(()) *> ZIO.never)
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          _         <- ZIO.scoped(cache.get(1)).fork
+                          _         <- started.await
+                          refresher <- cache.refresh(1).fork
+                          _ <- refresher.status
+                                 .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                                 .timeout(5.seconds)
+                                 .withClock(Clock.ClockLive)
+                          exit     <- refresher.interrupt.timeout(5.seconds).withClock(Clock.ClockLive)
+                          contains <- cache.contains(1)
+                          n        <- calls.get
+                        } yield assertTrue(exit.exists(_.isInterrupted), contains, n == 1)
+                      }
+                    }
+        } yield result
       }
     ),
     suite("expiration")(
