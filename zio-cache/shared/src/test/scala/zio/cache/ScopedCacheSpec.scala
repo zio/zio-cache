@@ -1620,6 +1620,102 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                     }
         } yield result
       },
+      test("a get whose failed lookup has a dying finalizer does not undo a later refresh") {
+        for {
+          calls      <- Ref.make(0)
+          finStarted <- Promise.make[Nothing, Unit]
+          finGate    <- Promise.make[Nothing, Unit]
+          startedF   <- Promise.make[Nothing, Unit]
+          gateF      <- Promise.make[Nothing, Unit]
+          inFlight   <- Ref.make(0)
+          most       <- Ref.make(0)
+          // Counts the lookups of the key that run at the same time
+          lookup = ScopedLookup((_: Int) =>
+                     (inFlight.updateAndGet(_ + 1).flatMap(n => most.update(math.max(_, n))) *>
+                       calls.updateAndGet(_ + 1).flatMap {
+                         case 1 =>
+                           ZIO.addFinalizer(
+                             finStarted.succeed(()) *> finGate.await *> ZIO.die(new RuntimeException("boom"))
+                           ) *> ZIO.fail("e1")
+                         case 2 => startedF.succeed(()) *> gateF.await.as("old")
+                         case _ => ZIO.succeed("new")
+                       }).ensuring(inFlight.update(_ - 1))
+                   )
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          g <- ZIO.scoped(cache.get(1)).exit.fork
+                          // the failure is stored and its promise completed; the lookup's own finalizer is running
+                          _ <- finStarted.await
+                          // F replaces the stored failure with its Refreshing and starts lookup 2 ("old" data)
+                          f <- cache.refresh(1).fork
+                          _ <- startedF.await
+                          // the finalizer dies: G's onError undoes F's Refreshing although lookup 2 still runs
+                          _     <- finGate.succeed(())
+                          gExit <- g.join
+                          // W is called after lookup 2 started
+                          w <- cache.refresh(1).fork
+                          _ <- w.status
+                                 .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                                 .timeout(5.seconds)
+                                 .withClock(Clock.ClockLive)
+                          _ <- gateF.succeed(())
+                          _ <- f.join *> w.join
+                          m <- most.get
+                        } yield assertTrue(gExit.isFailure, m == 1)
+                      }
+                    }
+        } yield result
+      },
+      test("a refresh whose release of the value it replaces dies does not undo a later refresh") {
+        for {
+          calls      <- Ref.make(0)
+          finStarted <- Promise.make[Nothing, Unit]
+          finGate    <- Promise.make[Nothing, Unit]
+          startedF   <- Promise.make[Nothing, Unit]
+          gateF      <- Promise.make[Nothing, Unit]
+          inFlight   <- Ref.make(0)
+          most       <- Ref.make(0)
+          // Counts the lookups of the key that run at the same time
+          lookup = ScopedLookup((_: Int) =>
+                     (inFlight.updateAndGet(_ + 1).flatMap(n => most.update(math.max(_, n))) *>
+                       calls.updateAndGet(_ + 1).flatMap {
+                         case 1 =>
+                           ZIO.acquireRelease(ZIO.succeed("v1"))(_ =>
+                             finStarted.succeed(()) *> finGate.await *> ZIO.die(new RuntimeException("boom"))
+                           )
+                         case 2 => ZIO.succeed("v2")
+                         case 3 => startedF.succeed(()) *> gateF.await.as("old")
+                         case _ => ZIO.succeed("new")
+                       }).ensuring(inFlight.update(_ - 1))
+                   )
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          _ <- ZIO.scoped(cache.get(1))
+                          // R stores v2, then releases v1, whose finalizer blocks and then dies
+                          r <- cache.refresh(1).exit.fork
+                          _ <- finStarted.await
+                          // F replaces v2 with its Refreshing and starts lookup 3 ("old" data)
+                          f <- cache.refresh(1).fork
+                          _ <- startedF.await
+                          // R's onError undoes F's Refreshing although lookup 3 still runs
+                          _     <- finGate.succeed(())
+                          rExit <- r.join
+                          // W is called after lookup 3 started
+                          w <- cache.refresh(1).fork
+                          _ <- w.status
+                                 .repeatUntil(s => s.isInstanceOf[Fiber.Status.Suspended] || s == Fiber.Status.Done)
+                                 .timeout(5.seconds)
+                                 .withClock(Clock.ClockLive)
+                          _ <- gateF.succeed(())
+                          _ <- f.join *> w.join
+                          m <- most.get
+                        } yield assertTrue(rExit.isFailure, m == 1)
+                      }
+                    }
+        } yield result
+      },
       test("a get looks up its key again after an eviction it runs fails to release") {
         val lookup = ScopedLookup { (key: Int) =>
           if (key == 1) ZIO.acquireRelease(ZIO.succeed(key))(_ => ZIO.die(new RuntimeException("release")))

@@ -351,10 +351,16 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     forWaiters: Acquire
   ): UIO[Unit] =
     ZIO.succeed {
-      // Only undo the entry this lookup belongs to, not one added after an invalidation
-      val current = map.get(key)
-      if (isEntryOf(mapKey, current)) undoLookup(key, current)
-      promise.unsafe.done(Exit.succeed(forWaiters))(Unsafe)
+      // Only the fiber that ran the lookup completes its promise, right after it stores or undoes the entry. Once the
+      // promise is completed, an entry with the same key belongs to a later refresh, which keeps the key: a death after
+      // that, e.g. in a release, leaves it alone.
+      val hasEnded = promise.unsafe.isDone(Unsafe)
+      if (!hasEnded) {
+        // Only undo the entry this lookup belongs to, not one added after an invalidation
+        val current = map.get(key)
+        if (isEntryOf(mapKey, current)) undoLookup(key, current)
+        promise.unsafe.done(Exit.succeed(forWaiters))(Unsafe)
+      }
     }
 
   private def newPromise() =
