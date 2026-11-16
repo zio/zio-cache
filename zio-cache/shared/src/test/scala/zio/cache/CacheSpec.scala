@@ -273,9 +273,44 @@ object CacheSpec extends ZIOSpecDefault {
           again <- cache.get(three).timeout(10.seconds)
           _     <- ZIO.foreachDiscard(4 to 10)(i => cache.get(new HookKey(i)))
           size  <- cache.size
+          // Still tracked, so evicted like the others
+          hasOne <- cache.contains(one)
         } yield assertTrue(first.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode")) &&
-          assertTrue(again.contains(3), size == 2)
+          assertTrue(again.contains(3), size == 2, !hasOne)
       } @@ TestAspect.withLiveClock,
+      test("keeps its capacity when a key's hashCode always throws during evictions") {
+        for {
+          cache <- Cache.make(2, Duration.Infinity, Lookup((key: EvictionThrowingKey) => ZIO.succeed(key.id)))
+          one    = new EvictionThrowingKey(1)
+          _     <- cache.get(one) *> cache.get(new EvictionThrowingKey(2))
+          _     <- ZIO.succeed(one.throwsDuringEviction = true)
+          exits <- ZIO.foreach((3 to 10).toList)(i => cache.get(new EvictionThrowingKey(i)).exit)
+          size  <- cache.size
+          // `one` stays, and every other get finds it first in eviction order: it is moved last, and the others evicted
+          died = exits.count(_.isFailure)
+          // After `invalidateAll`, `one` is a stale key that throws whenever the gets below drop stale keys
+          _ <- cache.invalidateAll
+          later <- ZIO.foreach((11 to 14).toList) { i =>
+                     val key = new EvictionThrowingKey(i)
+                     cache.get(key).exit <* cache.invalidate(key)
+                   }
+        } yield assertTrue(size == 2, died == 4, later == (11 to 14).toList.map(Exit.succeed(_)))
+      } @@ TestAspect.jvmOnly,
+      test("a get whose eviction throws counts one hit or miss") {
+        for {
+          cache <- Cache.make(1, 10.seconds, Lookup((key: EvictionThrowingKey) => ZIO.succeed(key.id)))
+          one    = new EvictionThrowingKey(1)
+          two    = new EvictionThrowingKey(2)
+          _     <- cache.get(one)
+          _     <- ZIO.succeed { one.throwsDuringEviction = true; two.throwsDuringEviction = true }
+          // Every key throws, so each of these evictions dies without removing anything: a miss, then two hits
+          _ <- cache.get(two).exit *> cache.get(two).exit *> cache.get(one).exit
+          // `one` has expired: the get removes it and looks it up again, a miss
+          _     <- TestClock.adjust(11.seconds)
+          _     <- cache.get(one).exit
+          stats <- cache.cacheStats
+        } yield assertTrue(stats.hits == 2L, stats.misses == 3L)
+      } @@ TestAspect.jvmOnly,
       test("does not evict an entry when an invalidation during the eviction makes room") {
         for {
           runtime <- ZIO.runtime[Any]

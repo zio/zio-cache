@@ -24,7 +24,6 @@ import java.time.{Duration, Instant}
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicBoolean, LongAdder}
 import scala.annotation.tailrec
-import scala.util.control.NonFatal
 
 /**
  * A `Cache` is defined in terms of a lookup function that, given a key of
@@ -201,25 +200,27 @@ object Cache {
         case null =>
           trackMiss()
           trackAccessAndLookUp(in, k, key, promise)
+        // Each branch counts its hit or miss before it tracks the access, which dies if a key throws during the eviction
         case MapValue.Pending(key, promise) =>
-          trackAccess(key)
           trackHit()
+          trackAccess(key)
           restore(promise.await)
         case MapValue.Complete(key, exit, _, timeToLive) =>
-          trackAccess(key)
+          // The retry tracks the access to the entry it finds
           if (hasExpired(timeToLive)) {
             map.remove(k, value)
             getUnsafe(in)
           } else {
             trackHit()
+            trackAccess(key)
             exit
           }
         case MapValue.Refreshing(
               promiseInProgress,
               MapValue.Complete(mapKey, currentResult, _, ttl)
             ) =>
-          trackAccess(mapKey)
           trackHit()
+          trackAccess(mapKey)
           if (hasExpired(ttl)) {
             restore(promiseInProgress.await)
           } else {
@@ -283,7 +284,7 @@ object Cache {
         trackAccess(mapKey)
         lookupValue
       } catch {
-        case NonFatal(e) => lookupValue.exitWith(_ => Exit.die(e))
+        case e: Throwable if isNonFatal(e) => lookupValue.exitWith(_ => Exit.die(e))
       }
     }
 
@@ -338,7 +339,18 @@ object Cache {
       def overCapacity: Boolean =
         map.size > capacity
 
+      // A key whose `hashCode` or `equals` throws is kept, and moved last in eviction order so that the eviction goes on
+      // with the other keys. This call then dies with the exception.
       def processAccesses(): Unit = {
+        var failure: Throwable = null
+
+        // Kept without dying: the eviction reaches the key in turn, and dies there
+        def isLiveOrThrows(key: MapKey[Key]): Boolean =
+          try isLive(key)
+          catch {
+            case e: Throwable if isNonFatal(e) => true
+          }
+
         var loop = true
         while (loop) {
           val key = accesses.poll(null)
@@ -351,40 +363,55 @@ object Cache {
         val size = map.size
         // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
         val tooManyStaleKeys = keys.size > 2 * size
-        if (tooManyStaleKeys) keys.retain(isLive)
+        if (tooManyStaleKeys) keys.retain(isLiveOrThrows)
         loop = size > capacity
+        var firstThrowing: MapKey[Key] = null
         while (loop) {
-          // A key leaves the set only once its entry is gone, so an eviction that throws starts again from it
+          // A key leaves the set only once its entry is gone
           val key = keys.first
-          if (key ne null) {
-            val value = map.get(key.value)
-            if (!isEntryOf(key, value)) {
-              keys.remove()
-            } else if (overCapacity) {
-              // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key: if so, read it again
-              if (map.remove(key.value, value)) {
+          // Every key left has thrown once the first key that threw is first again
+          val canEvict = (key ne null) && (key ne firstThrowing)
+          if (canEvict) {
+            try {
+              val value = map.get(key.value)
+              if (!isEntryOf(key, value)) {
                 keys.remove()
-                loop = overCapacity
+              } else if (overCapacity) {
+                // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key: if so, read it again
+                if (map.remove(key.value, value)) {
+                  keys.remove()
+                  loop = overCapacity
+                }
+              } else {
+                loop = false
               }
-            } else {
-              loop = false
+            } catch {
+              case e: Throwable if isNonFatal(e) =>
+                // Moves the key last
+                keys.add(key)
+                failure = e
+                if (firstThrowing eq null) firstThrowing = key
             }
           } else {
             loop = false
           }
         }
+        if (failure ne null) throw failure
       }
 
       accesses.offer(key)
       // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again.
       // A fiber that loses the race returns: its access is queued, and the fiber holding `updating` processes it.
       while (tryStartProcessingAccesses()) {
-        // Reset even if a key's `hashCode` or `equals` throws: this call then dies, and the next one processes the
-        // accesses still queued
+        // Reset even if the eviction throws: this call then dies, and the next one processes the accesses still queued
         try processAccesses()
         finally updating.set(false)
       }
     }
+
+    // What ZIO turns into a defect
+    private def isNonFatal(e: Throwable): Boolean =
+      !e.isInstanceOf[VirtualMachineError]
 
     private def isLive(key: MapKey[Key]): Boolean =
       isEntryOf(key, map.get(key.value))
