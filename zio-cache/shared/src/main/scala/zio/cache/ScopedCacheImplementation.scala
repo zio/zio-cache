@@ -115,7 +115,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   private def trackMiss(): Unit =
     misses.increment()
 
-  private def ensureMapSizeNotExceeded(key: MapKey[Key]): UIO[Unit] = {
+  // Evicts when the effect runs, not when it is built
+  private def ensureMapSizeNotExceeded(key: MapKey[Key]): UIO[Unit] = ZIO.suspendSucceed {
     val evicted = mutable.ArrayBuilder.make[MapValue[Key, Error, Value]]
     // The entries evicted before the eviction throws are released before this call dies
     val eviction =

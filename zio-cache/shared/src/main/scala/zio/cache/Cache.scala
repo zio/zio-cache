@@ -275,10 +275,11 @@ object Cache {
      * Tracks the access to the entry this call added, then runs its lookup.
      * Other calls wait for the lookup's result, so it runs even if the
      * eviction fails, and this call then dies with the eviction's failure.
+     * Both happen when the effect runs, not when it is built.
      */
     private def trackAccessAndLookUp(in: In, key: Key, mapKey: MapKey[Key], promise: Promise[Error, Value])(implicit
       restore: ZIO.InterruptibilityRestorer
-    ): IO[Error, Value] = {
+    ): IO[Error, Value] = ZIO.suspendSucceed {
       val lookupValue = lookupValueOf(in, key, mapKey, promise)
       try {
         trackAccess(mapKey)
