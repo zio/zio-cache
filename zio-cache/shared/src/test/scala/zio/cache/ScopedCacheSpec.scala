@@ -23,7 +23,7 @@ import zio.{
 }
 
 import java.time.{Instant, ZoneId, ZoneOffset}
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 object ScopedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment with Scope, Any] = suite("SharedScoped")(
@@ -919,6 +919,52 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           logs  <- ZTestLogger.logOutput
           logged = logs.count(entry => entry.logLevel == LogLevel.Error && entry.cause.dieOption.contains(failure))
         } yield assertTrue(count == 1, size == 0, logged == 1)
+      },
+      test("releases the expired entries it removed when a key fails once") {
+        val one = new ThrowingKey(1)
+        val two = new ThrowingKey(2)
+        for {
+          released <- Ref.make(Set.empty[Int])
+          lookup = ScopedLookup { (key: ThrowingKey) =>
+                     ZIO.acquireRelease(ZIO.succeed(key.id))(id => released.update(_ + id))
+                   }
+          scope <- Scope.make
+          cache <- ScopedCache
+                     .makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds)
+                     .provideEnvironment(ZEnvironment(scope))
+          _            <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(two))
+          _            <- ZIO.succeed(two.throwing.set(true))
+          _            <- TestClock.adjust(11.seconds)
+          _            <- ZIO.succeed(two.throwing.set(false))
+          afterCleaner <- released.get
+          _            <- scope.close(Exit.unit)
+          afterClose   <- released.get
+        } yield assertTrue(afterCleaner == Set(1), afterClose == Set(1, 2))
+      },
+      test("releases the expired entries it removed when a key keeps failing") {
+        val zero = new ThrowingKey(0)
+        val one  = new ThrowingKey(1)
+        val two  = new ThrowingKey(2)
+        for {
+          released <- Ref.make(Set.empty[Int])
+          lookup = ScopedLookup { (key: ThrowingKey) =>
+                     ZIO.acquireRelease(ZIO.succeed(key.id))(id => released.update(_ + id))
+                   }
+          scope <- Scope.make
+          cache <- ScopedCache
+                     .makeWith(100, lookup)((_: Exit[Nothing, Int]) => 10.seconds)
+                     .provideEnvironment(ZEnvironment(scope))
+          _ <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(two))
+          _ <- ZIO.succeed(two.throwing.set(true))
+          _ <- TestClock.adjust(11.seconds)
+          _ <- ZIO.scoped(cache.get(zero))
+          // The key still fails when the next entry expires
+          _            <- TestClock.adjust(11.seconds)
+          _            <- ZIO.succeed(two.throwing.set(false))
+          afterCleaner <- released.get
+          _            <- scope.close(Exit.unit)
+          afterClose   <- released.get
+        } yield assertTrue(afterCleaner == Set(0, 1), afterClose == Set(0, 1, 2))
       }
     ),
     suite("property base testing")(
@@ -1537,6 +1583,30 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                   }
       } yield result
     },
+    test("invalidateAll releases every other entry when a key fails") {
+      val keys = (1 to 20).toList.map(new ThrowingKey(_))
+      for {
+        released <- Ref.make(0)
+        lookup = ScopedLookup { (key: ThrowingKey) =>
+                   ZIO.acquireRelease(ZIO.succeed(key.id))(_ => released.update(_ + 1))
+                 }
+        result <- ZIO.scoped {
+                    ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                      val round = for {
+                        _      <- ZIO.foreachDiscard(keys)(key => ZIO.scoped(cache.get(key)))
+                        before <- released.get
+                        _      <- ZIO.succeed(keys.head.throwing.set(true))
+                        _      <- cache.invalidateAll.exit
+                        _      <- ZIO.succeed(keys.head.throwing.set(false))
+                        after  <- released.get
+                      } yield after - before
+                      // The other keys are only skipped if the failing one ends before they start, so the race is tried
+                      // several times
+                      ZIO.foreach(1 to 100)(_ => round).map(counts => assertTrue(counts.count(_ != 19) == 0))
+                    }
+                  }
+      } yield result
+    },
     test("invalidateAll completes when entries are invalidated while it runs") {
       val keys = (1 to 10).toList
       ZIO.scoped {
@@ -1624,6 +1694,25 @@ object ScopedCacheSpec extends ZIOSpecDefault {
       hook.run()
       id
     }
+  }
+
+  /**
+   * A key whose hash code throws while `throwing` is set. Equality only
+   * depends on `id`.
+   */
+  final class ThrowingKey(val id: Int) {
+    val throwing = new AtomicBoolean(false)
+
+    override def hashCode: Int = {
+      if (throwing.get) throw new RuntimeException(s"hash code of $id failed")
+      id
+    }
+
+    override def equals(that: Any): Boolean =
+      that match {
+        case key: ThrowingKey => key.id == id
+        case _                => false
+      }
   }
 
   type Releaser = (=> Exit[Any, Any]) => UIO[Unit]

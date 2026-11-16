@@ -74,6 +74,10 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     if (isEntryOf(key, value)) value else null
   }
 
+  // What ZIO turns into a defect
+  private def isNonFatal(e: Throwable): Boolean =
+    !e.isInstanceOf[VirtualMachineError]
+
   private def isLive(key: MapKey[Key]): Boolean =
     isEntryOf(key, map.get(key.value))
 
@@ -115,12 +119,18 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   // Uninterruptible: the removed entries are no longer in the map, so nothing else would release them
   def freeExpired: UIO[Int] = ZIO.suspendSucceedUnsafe { implicit unsafe =>
     var removed = List.empty[MapValue.Complete[Key, Error, Value]]
+    // A key whose `hashCode` or `equals` throws stays in the map, and its failure is reported with the others
+    var keyFailures = List.empty[Exit[Nothing, Unit]]
     map.entrySet().forEach { entry =>
       entry.getValue match {
         case complete @ MapValue.Complete(_, _, _, _, ttl) =>
-          // Removing by value keeps an entry that replaced the expired one in the meantime
-          val removedExpired = hasExpired(ttl) && map.remove(entry.getKey, complete)
-          if (removedExpired) removed = complete :: removed
+          try {
+            // Removing by value keeps an entry that replaced the expired one in the meantime
+            val removedExpired = hasExpired(ttl) && map.remove(entry.getKey, complete)
+            if (removedExpired) removed = complete :: removed
+          } catch {
+            case e: Throwable if isNonFatal(e) => keyFailures = Exit.die(e) :: keyFailures
+          }
         case _: MapValue.Pending[?, ?, ?] | _: MapValue.Refreshing[?, ?, ?] =>
           ()
       }
@@ -129,7 +139,7 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     // A failing release must not stop the others, so every entry is released before the failures are reported
     ZIO
       .foreach(removed)(_.releaseOwner.exit)
-      .flatMap(exits => Exit.collectAllPar(exits).getOrElse(Exit.unit))
+      .flatMap(exits => Exit.collectAllPar(keyFailures ++ exits).getOrElse(Exit.unit))
       .as(removed.length)
   }.uninterruptible
 
@@ -228,9 +238,13 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     }
   }.uninterruptible
 
-  // `foreachParDiscard` counts the keys before it iterates them, so it is given a copy that cannot change in between
+  // `foreachPar` counts the keys before it iterates them, so it is given a copy that cannot change in between. A key or
+  // a release that fails must not stop the others, so every key is invalidated before the failures are reported.
   override def invalidateAll: UIO[Unit] =
-    ZIO.foreachParDiscard(map.keySet().asScala.toList)(invalidate)
+    ZIO
+      .foreachPar(map.keySet().asScala.toList)(invalidate(_).exit)
+      .flatMap(exits => Exit.collectAllPar(exits).getOrElse(Exit.unit))
+      .unit
 
   override def size: UIO[Int] =
     ZIO.succeed(map.size)
