@@ -118,6 +118,7 @@ lazy val docs = project
     projectStage                               := ProjectStage.Development,
     ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioCacheJVM),
     crossScalaVersions                         := List(scala213V),
+    libraryDependencies += "dev.zio"           %% "zio-test" % zioVersion.value,
     publish / skip                             := true
   )
   .dependsOn(zioCacheJVM)
