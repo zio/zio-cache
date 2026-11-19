@@ -25,7 +25,9 @@ const sidebars = {
         "how-to-cache-failures",
         "how-to-refresh-in-background",
         "how-to-cache-resources",
-        "how-to-monitor-hit-rate"
+        "how-to-monitor-hit-rate",
+        "how-to-use-custom-cache-keys",
+        "how-to-invalidate-on-write"
       ]
     },
     "resources"

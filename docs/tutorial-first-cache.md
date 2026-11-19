@@ -1,6 +1,7 @@
 ---
 id: tutorial-first-cache
 title: "Tutorial: Your First Cache"
+sidebar_label: "Tutorial"
 description: "Build a small cache around a slow lookup, then read values, statistics, and concurrent results with ZIO Cache."
 keywords:
   - "Caching"
