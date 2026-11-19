@@ -10,11 +10,11 @@ ZIO Cache is a library that makes it easy to optimize the performance of our app
 
 ## Introduction
 
-Sometimes we may call or receive requests to do overlapping work. Assume we are writing a service that is going to handle all incoming requests. We don't want to handle duplicate requests. Using ZIO Cache we can make our application to be more **performant** by preventing duplicated works.
+Sometimes we may call or receive requests to do overlapping work. Assume we are writing a service that is going to handle all incoming requests. We don't want to handle duplicate requests. Using ZIO Cache we can make our application more **performant** by preventing duplicated work.
 
 Some key features of ZIO Cache:
 
-- **Compositionality** — If we want our applications to be **compositional**, different parts of our application may do overlapping work. ZIO Cache helps us to stay benefit from compositionality while using caching.
+- **Compositionality** — If we want our applications to be **compositional**, different parts of our application may do overlapping work. ZIO Cache lets us keep that compositionality while using caching.
 - **Unification of Synchronous and Asynchronous Caches** — Compositional definition of cache in terms of _lookup function_ unifies synchronous and asynchronous caches. So the lookup function can compute value either synchronously or asynchronously.
 
 - **Deep ZIO Integration** — ZIO Cache is a ZIO native solution. So without losing the power of ZIO it includes support for _concurrent lookups_, _failure_, and _interruption_.
