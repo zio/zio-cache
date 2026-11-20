@@ -32,7 +32,8 @@ private[cache] final class KeySet[Key] {
   def size: Int = count
 
   /**
-   * Adds the specified key to the set.
+   * Adds the specified key as the most recently accessed one, moving it there
+   * if it is already in the set.
    */
   def add(key: MapKey[Key]): Unit =
     if (key ne tail) {

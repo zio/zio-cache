@@ -324,6 +324,10 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     clock.unsafe.instant()(Unsafe).isAfter(timeToLive)
 }
 
+/**
+ * Companion of the private `ScopedCacheImplementation`: it holds the cache's
+ * private state and map-entry types.
+ */
 object ScopedCacheImplementation {
   private object CacheState {
 
@@ -343,9 +347,10 @@ object ScopedCacheImplementation {
 
   /**
    * A `MapValue` represents a value in the cache. A value may either be
-   * `Pending` with a `Promise` that will contain the result of computing the
-   * lookup function, when it is available, or `Complete` with an `Exit` value
-   * that contains the result of computing the lookup function.
+   * `Pending` with an effect that yields the resource once its lookup has run,
+   * `Complete` with an `Exit` value that contains the result of computing the
+   * lookup function, or `Refreshing` with the effect for the new resource while
+   * the previous `Complete` value is still served.
    */
   private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable {
     def key: MapKey[Key]

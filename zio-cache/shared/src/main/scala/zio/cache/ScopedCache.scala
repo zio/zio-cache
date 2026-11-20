@@ -25,47 +25,87 @@ import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
 import scala.jdk.CollectionConverters._
 
+/**
+ * A `ScopedCache` is like a [[Cache]] whose values are resources. Its lookup
+ * function is a [[ScopedLookup]]: it acquires a resource in a `Scope`, and the
+ * cache keeps that resource open while it is cached.
+ *
+ * `get` acquires the cached resource in the caller's `Scope`. The resource's
+ * finalizers run once the cache has dropped the entry (it expired, was
+ * invalidated, or the cache's own scope closed) and no caller's scope still
+ * holds it. Expired entries are released by a background sweep that runs about
+ * once a second, so an expired resource can stay open for a moment after its
+ * time to live passes.
+ *
+ * {{{
+ * import zio._
+ *
+ * val program: UIO[Unit] =
+ *   ZIO.scoped {
+ *     for {
+ *       cache <- ScopedCache.make(
+ *                  capacity = 10,
+ *                  timeToLive = 1.minute,
+ *                  lookup = ScopedLookup((id: Int) =>
+ *                    ZIO.acquireRelease(Console.printLine(s"open $id").orDie.as(id))(_ =>
+ *                      Console.printLine(s"close $id").orDie
+ *                    )
+ *                  )
+ *                )
+ *       first  <- ZIO.scoped(cache.get(1))
+ *       second <- ZIO.scoped(cache.get(1))
+ *     } yield ()
+ *   }
+ * // prints "open 1" once, then "close 1" when the outer scope closes
+ * }}}
+ *
+ * @see [[https://zio.dev/zio-cache/scoped-cache/ Scoped Cache]]
+ */
 abstract class ScopedCache[-Key, +Error, +Value] {
 
   /**
-   * Returns statistics for this cache.
-   * @return
+   * Returns a snapshot of the hit count, the miss count and the number of
+   * entries of this cache.
    */
   def cacheStats: UIO[CacheStats]
 
   /**
-   * Return whether a resource associated with the specified key exists in the cache.
-   * Sometime `contains` can return true if the resource is currently being created
-   * but not yet totally created
-   * @param key
-   * @return
+   * Returns whether the cache has an entry for the specified key that has not
+   * expired. A key whose resource is still being created counts as present,
+   * even when that lookup is a refresh of a value that has expired.
    */
   def contains(key: Key): UIO[Boolean]
 
   /**
-   * Return statistics for the specified entry.
+   * Returns statistics for the entry of the specified key, or `None` when there
+   * is no entry or its first lookup is still running.
    */
   def entryStats(key: Key): UIO[Option[EntryStats]]
 
   /**
-   * Gets the value from the cache if it exists or otherwise computes it, the release action signals to the cache that
-   * the value is no longer being used and can potentially be finalized subject to the policies of the cache
-   * @param key
-   * @return
+   * Gets the resource for the specified key from the cache, or computes it with
+   * the lookup function if there is none or it has expired. The resource is
+   * acquired in the caller's `Scope`: closing that scope tells the cache that
+   * the caller no longer uses it, and the resource's finalizers run once the
+   * cache has also dropped the entry and no other scope holds it.
    */
   def get(key: Key): ZIO[Scope, Error, Value]
 
   /**
-   * Force the reuse of the lookup function to compute the returned scoped effect associated with the specified key immediately
-   * Once the new resource is recomputed, the old resource associated to the key is cleaned (once all fiber using it are done with it)
-   * During the time the new resource is computed, concurrent call the .get will use the old resource if this one is not expired
-   * @param key
-   * @return
+   * Computes a new resource for the specified key with the lookup function and
+   * puts it in the cache. Once the new resource is ready, the old one is
+   * released from the cache, and its finalizers run once all callers that
+   * acquired it have closed their scopes. While the new resource is being
+   * computed, `get` still returns the old one unless it has expired.
+   *
+   * If a lookup for the key is already running, `refresh` waits for it instead
+   * of starting another.
    */
   def refresh(key: Key): IO[Error, Unit]
 
   /**
-   * Invalidates the resource associated with the specified key.
+   * Invalidates the resource associated with the specified key. Its finalizers
+   * run once all callers that acquired it have closed their scopes.
    */
   def invalidate(key: Key): UIO[Unit]
 
@@ -75,15 +115,22 @@ abstract class ScopedCache[-Key, +Error, +Value] {
   def invalidateAll: UIO[Unit]
 
   /**
-   * Returns the approximate number of values in the cache.
+   * Returns the approximate number of entries in the cache. Entries whose
+   * lookup is still running, and expired entries that have not been released
+   * yet, are counted too.
    */
   def size: UIO[Int]
 }
+
+/**
+ * Constructors for [[ScopedCache]].
+ */
 object ScopedCache {
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
-   * lookup function.
+   * lookup function. Closing the returned `Scope` invalidates every entry and
+   * stops the background sweep that releases expired entries.
    */
   def make[Key, Environment, Error, Value](
     capacity: Int,
@@ -95,7 +142,8 @@ object ScopedCache {
   /**
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function, where the time to live can depend on the `Exit` value
-   * returned by the lookup function.
+   * returned by the lookup function. Closing the returned `Scope` invalidates
+   * every entry and stops the background sweep that releases expired entries.
    */
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
@@ -128,9 +176,10 @@ object ScopedCache {
 
   /**
    * A `MapValue` represents a value in the cache. A value may either be
-   * `Pending` with a `Promise` that will contain the result of computing the
-   * lookup function, when it is available, or `Complete` with an `Exit` value
-   * that contains the result of computing the lookup function.
+   * `Pending` with an effect that yields the resource once its lookup has run,
+   * `Complete` with an `Exit` value that contains the result of computing the
+   * lookup function, or `Refreshing` with the effect for the new resource while
+   * the previous `Complete` value is still served.
    */
   private sealed trait MapValue[Key, +Error, +Value] extends Product with Serializable
 
@@ -202,5 +251,9 @@ object ScopedCache {
       )
   }
 
+  /**
+   * An action that closes the scope a cached resource was acquired in. It runs
+   * the resource's finalizers with the `Exit` it is given.
+   */
   type Finalizer = (=> Exit[Any, Any]) => UIO[Any]
 }

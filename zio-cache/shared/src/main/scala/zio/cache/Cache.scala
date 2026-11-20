@@ -39,32 +39,61 @@ import scala.annotation.tailrec
  * the specified time to live will result in a new value being computed with
  * the lookup function and returned when available.
  *
- * The cache is safe for concurrent access. If multiple fibers attempt to get
- * the same key the lookup function will only be computed once and the result
- * will be returned to all fibers.
+ * The cache is safe for concurrent access. If multiple fibers get the same key
+ * while its lookup is running, or after it has completed and before the value
+ * expires or is evicted, the lookup function is computed once and its result
+ * is returned to all of them.
+ *
+ * A failed lookup is cached like a successful one: the `Exit` it produced is
+ * returned to later callers until its time to live passes.
+ *
+ * {{{
+ * import zio._
+ *
+ * val program: UIO[(Int, Int, CacheStats)] =
+ *   for {
+ *     cache <- Cache.make(
+ *                capacity = 100,
+ *                timeToLive = 1.hour,
+ *                lookup = Lookup((id: Int) => ZIO.succeed(id * 2))
+ *              )
+ *     first  <- cache.get(21)
+ *     second <- cache.get(21)
+ *     stats  <- cache.cacheStats
+ *   } yield (first, second, stats)
+ * // (42,42,CacheStats(1,1,1))
+ * }}}
+ *
+ * @see [[https://zio.dev/zio-cache/cache/ Cache]]
  */
 abstract class Cache[-Key, +Error, +Value] {
 
   /**
-   * Returns statistics for this cache.
+   * Returns a snapshot of the hit count, the miss count and the number of
+   * entries of this cache.
    */
   def cacheStats(implicit trace: Trace): UIO[CacheStats]
 
   /**
-   * Returns whether a value associated with the specified key exists in the
-   * cache.
+   * Returns whether the cache has an entry for the specified key that has not
+   * expired. A key whose lookup is still running counts as present, even when
+   * the lookup is a refresh of a value that has expired. A key whose lookup
+   * failed counts as present until its time to live passes.
    */
   def contains(key: Key)(implicit trace: Trace): UIO[Boolean]
 
   /**
-   * Returns statistics for the specified entry.
+   * Returns statistics for the entry of the specified key, or `None` when there
+   * is no entry or its first lookup is still running. An entry that is being
+   * refreshed reports the statistics of the value it is replacing.
    */
   def entryStats(key: Key)(implicit trace: Trace): UIO[Option[EntryStats]]
 
   /**
-   * Retrieves the value associated with the specified key if it exists.
-   * Otherwise computes the value with the lookup function, puts it in the
-   * cache, and returns it.
+   * Retrieves the value associated with the specified key if it exists and has
+   * not expired. Otherwise computes the value with the lookup function, puts it
+   * in the cache, and returns it. If the lookup fails, the failure is cached
+   * and returned in the same way.
    */
   def get(key: Key)(implicit trace: Trace): IO[Error, Value]
 
@@ -74,8 +103,13 @@ abstract class Cache[-Key, +Error, +Value] {
    * `get` method is that `refresh` triggers (re)computation of the value
    * without invalidating it in the cache, so any request to the associated
    * key can still be served while the value is being re-computed/retrieved
-   * by the lookup function. Additionally, `refresh` always triggers the
-   * lookup function, disregarding the last `Error`.
+   * by the lookup function, as long as that value has not expired.
+   * Additionally, `refresh` runs the lookup function even when the cached
+   * result is a failure.
+   *
+   * If a lookup for the key is already running, `refresh` waits for it instead
+   * of starting another. Refreshing a missing or unexpired entry does not change
+   * the hit and miss counts.
    */
   def refresh(key: Key): IO[Error, Unit]
 
@@ -90,16 +124,22 @@ abstract class Cache[-Key, +Error, +Value] {
   def invalidateAll: UIO[Unit]
 
   /**
-   * Returns the approximate number of values in the cache.
+   * Returns the approximate number of entries in the cache. Entries whose
+   * lookup is still running, and expired entries that have not been replaced
+   * yet, are counted too.
    */
   def size(implicit trace: Trace): UIO[Int]
 }
 
+/**
+ * Constructors for [[Cache]].
+ */
 object Cache {
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
-   * lookup function.
+   * lookup function. The lookup function runs with the environment available
+   * when the cache is constructed.
    */
   def make[Key, Environment, Error, Value](
     capacity: Int,
@@ -127,9 +167,11 @@ object Cache {
    * returned by the lookup function.
    *
    * This variant also allows specifying a custom keying function that will be
-   * used to to convert the input of the lookup function into the key in the
+   * used to convert the input of the lookup function into the key in the
    * underlying cache. This can be useful when the input to the lookup function
-   * is large and you do not want to store it in the cache.
+   * is large and you do not want to store it in the cache. Inputs that map to
+   * the same key share one entry: the value computed for the first of them is
+   * returned for the others.
    */
   def makeWithKey[In, Key, Environment, Error, Value](
     capacity: Int,
@@ -381,8 +423,10 @@ object Cache {
   /**
    * A `MapValue` represents a value in the cache. A value may either be
    * `Pending` with a `Promise` that will contain the result of computing the
-   * lookup function, when it is available, or `Complete` with an `Exit` value
-   * that contains the result of computing the lookup function.
+   * lookup function, when it is available, `Complete` with an `Exit` value
+   * that contains the result of computing the lookup function, or `Refreshing`
+   * with a `Promise` for the new result while the previous `Complete` value is
+   * still served.
    */
   private sealed trait MapValue[Key, Error, Value] extends Product with Serializable {
     def key: MapKey[Key]

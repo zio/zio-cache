@@ -19,14 +19,20 @@ package zio.cache
 import zio.{Scope, ZIO}
 
 /**
- * Like lookup but scoped version
+ * A `ScopedLookup` represents a lookup function for a [[ScopedCache]]: given a
+ * key, it returns a `ZIO` effect that acquires a resource in a `Scope` and
+ * produces a value of type `Value`, or fails with an error of type `Error`,
+ * using an environment of type `Environment`. The cache closes that scope when
+ * it no longer needs the resource.
+ *
+ * It is the scoped counterpart of [[Lookup]].
  */
 final case class ScopedLookup[-Key, -Environment, +Error, +Value](
   lookup: Key => ZIO[Environment with Scope, Error, Value]
 ) extends (Key => ZIO[Environment with Scope, Error, Value]) {
 
   /**
-   * Computes a value for the specified key or fails with an error.
+   * Computes a value for the specified key in a `Scope`, or fails with an error.
    */
   def apply(key: Key): ZIO[Environment with Scope, Error, Value] =
     lookup(key)
