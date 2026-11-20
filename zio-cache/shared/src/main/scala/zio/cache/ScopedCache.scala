@@ -32,10 +32,12 @@ import scala.jdk.CollectionConverters._
  *
  * `get` acquires the cached resource in the caller's `Scope`. The resource's
  * finalizers run once the cache has dropped the entry (it expired, was
- * invalidated, or the cache's own scope closed) and no caller's scope still
- * holds it. Expired entries are released by a background sweep that runs about
- * once a second, so an expired resource can stay open for a moment after its
- * time to live passes.
+ * evicted, was replaced by `refresh`, was invalidated, or the cache's own scope
+ * closed) and no caller's scope still holds it. A lookup that fails releases
+ * its resource right away. Expired entries are dropped by a background sweep
+ * that runs about once a second, or by a `get` for that key, so an expired
+ * resource can stay open for up to about a second after its time to live
+ * passes.
  *
  * {{{
  * import zio._
@@ -46,11 +48,11 @@ import scala.jdk.CollectionConverters._
  *       cache <- ScopedCache.make(
  *                  capacity = 10,
  *                  timeToLive = 1.minute,
- *                  lookup = ScopedLookup((id: Int) =>
- *                    ZIO.acquireRelease(Console.printLine(s"open $id").orDie.as(id))(_ =>
- *                      Console.printLine(s"close $id").orDie
- *                    )
- *                  )
+ *                  lookup = ScopedLookup { (id: Int) =>
+ *                    val open  = Console.printLine(s"open \$id").orDie
+ *                    val close = Console.printLine(s"close \$id").orDie
+ *                    ZIO.acquireRelease(open.as(id))(_ => close)
+ *                  }
  *                )
  *       first  <- ZIO.scoped(cache.get(1))
  *       second <- ZIO.scoped(cache.get(1))
@@ -78,7 +80,9 @@ abstract class ScopedCache[-Key, +Error, +Value] {
 
   /**
    * Returns statistics for the entry of the specified key, or `None` when there
-   * is no entry or its first lookup is still running.
+   * is no entry or its lookup is still running, including a `get` that
+   * recomputes an expired value. An expired entry that has not been removed yet
+   * still reports its statistics.
    */
   def entryStats(key: Key): UIO[Option[EntryStats]]
 
@@ -98,6 +102,9 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * acquired it have closed their scopes. While the new resource is being
    * computed, `get` still returns the old one unless it has expired.
    *
+   * If the lookup fails, the failure replaces the old resource, which is
+   * released, and `get` returns that failure until its time to live passes.
+   *
    * If a lookup for the key is already running, `refresh` waits for it instead
    * of starting another.
    */
@@ -116,8 +123,8 @@ abstract class ScopedCache[-Key, +Error, +Value] {
 
   /**
    * Returns the approximate number of entries in the cache. Entries whose
-   * lookup is still running, and expired entries that have not been released
-   * yet, are counted too.
+   * lookup is still running, and expired entries that have not been removed
+   * yet, by the background sweep or by a `get`, are counted too.
    */
   def size: UIO[Int]
 }
@@ -129,8 +136,8 @@ object ScopedCache {
 
   /**
    * Constructs a new cache with the specified capacity, time to live, and
-   * lookup function. Closing the returned `Scope` invalidates every entry and
-   * stops the background sweep that releases expired entries.
+   * lookup function. Closing the `Scope` the cache is created in invalidates
+   * every entry and stops the background sweep that releases expired entries.
    */
   def make[Key, Environment, Error, Value](
     capacity: Int,
@@ -142,8 +149,9 @@ object ScopedCache {
   /**
    * Constructs a new cache with the specified capacity, time to live, and
    * lookup function, where the time to live can depend on the `Exit` value
-   * returned by the lookup function. Closing the returned `Scope` invalidates
-   * every entry and stops the background sweep that releases expired entries.
+   * returned by the lookup function. Closing the `Scope` the cache is created
+   * in invalidates every entry and stops the background sweep that releases
+   * expired entries.
    */
   def makeWith[Key, Environment, Error, Value](
     capacity: Int,
@@ -252,8 +260,8 @@ object ScopedCache {
   }
 
   /**
-   * An action that closes the scope a cached resource was acquired in. It runs
-   * the resource's finalizers with the `Exit` it is given.
+   * An action that closes the scope the lookup acquired a cached resource in,
+   * running its finalizers with the `Exit` it is given.
    */
   type Finalizer = (=> Exit[Any, Any]) => UIO[Any]
 }

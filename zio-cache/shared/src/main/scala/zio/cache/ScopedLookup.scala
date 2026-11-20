@@ -23,7 +23,8 @@ import zio.{Scope, ZIO}
  * key, it returns a `ZIO` effect that acquires a resource in a `Scope` and
  * produces a value of type `Value`, or fails with an error of type `Error`,
  * using an environment of type `Environment`. The cache closes that scope when
- * it no longer needs the resource.
+ * it no longer needs the resource, or right after the lookup fails or is
+ * interrupted.
  *
  * It is the scoped counterpart of [[Lookup]].
  */
@@ -32,7 +33,8 @@ final case class ScopedLookup[-Key, -Environment, +Error, +Value](
 ) extends (Key => ZIO[Environment with Scope, Error, Value]) {
 
   /**
-   * Computes a value for the specified key in a `Scope`, or fails with an error.
+   * Computes a value for the specified key in a `Scope`, or fails with an
+   * error.
    */
   def apply(key: Key): ZIO[Environment with Scope, Error, Value] =
     lookup(key)

@@ -41,11 +41,13 @@ import scala.annotation.tailrec
  *
  * The cache is safe for concurrent access. If multiple fibers get the same key
  * while its lookup is running, or after it has completed and before the value
- * expires or is evicted, the lookup function is computed once and its result
- * is returned to all of them.
+ * expires or is evicted or invalidated, the lookup function is computed once
+ * and its result is returned to all of them. If the fiber running the lookup
+ * is interrupted, the fibers waiting for it are interrupted too.
  *
  * A failed lookup is cached like a successful one: the `Exit` it produced is
- * returned to later callers until its time to live passes.
+ * returned to later callers until its time to live passes or the entry is
+ * invalidated, evicted or refreshed. An interrupted lookup is not cached.
  *
  * {{{
  * import zio._
@@ -84,8 +86,10 @@ abstract class Cache[-Key, +Error, +Value] {
 
   /**
    * Returns statistics for the entry of the specified key, or `None` when there
-   * is no entry or its first lookup is still running. An entry that is being
-   * refreshed reports the statistics of the value it is replacing.
+   * is no entry or its lookup is still running, including a `get` that
+   * recomputes an expired value. An entry that is being refreshed reports the
+   * statistics of the value it is replacing, and an expired entry that has not
+   * been removed yet still reports its statistics.
    */
   def entryStats(key: Key)(implicit trace: Trace): UIO[Option[EntryStats]]
 
@@ -105,11 +109,12 @@ abstract class Cache[-Key, +Error, +Value] {
    * key can still be served while the value is being re-computed/retrieved
    * by the lookup function, as long as that value has not expired.
    * Additionally, `refresh` runs the lookup function even when the cached
-   * result is a failure.
+   * result is a failure. If the lookup fails, the failure replaces the cached
+   * value.
    *
    * If a lookup for the key is already running, `refresh` waits for it instead
-   * of starting another. Refreshing a missing or unexpired entry does not change
-   * the hit and miss counts.
+   * of starting another. Refreshing a missing or unexpired entry does not
+   * change the hit and miss counts.
    */
   def refresh(key: Key): IO[Error, Unit]
 
@@ -125,8 +130,9 @@ abstract class Cache[-Key, +Error, +Value] {
 
   /**
    * Returns the approximate number of entries in the cache. Entries whose
-   * lookup is still running, and expired entries that have not been replaced
-   * yet, are counted too.
+   * lookup is still running, and expired entries that have not been removed
+   * yet, are counted too. An expired entry is removed when a `get` or
+   * `refresh` finds it, or when it is invalidated or evicted.
    */
   def size(implicit trace: Trace): UIO[Int]
 }
@@ -170,8 +176,9 @@ object Cache {
    * used to convert the input of the lookup function into the key in the
    * underlying cache. This can be useful when the input to the lookup function
    * is large and you do not want to store it in the cache. Inputs that map to
-   * the same key share one entry: the value computed for the first of them is
-   * returned for the others.
+   * the same key share one entry: its value is computed from the input of the
+   * call that started the lookup (a `get` of a missing or expired entry, or a
+   * `refresh`) and is returned for the other inputs.
    */
   def makeWithKey[In, Key, Environment, Error, Value](
     capacity: Int,
