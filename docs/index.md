@@ -29,19 +29,15 @@ ZIO Cache is published for Scala 2.12, 2.13 and 3. Add the artifact that matches
 On the JVM:
 
 ```scala
-libraryDependencies ++= Seq(
-  // Cache, ScopedCache, Lookup and statistics (JVM)
-  "dev.zio" %% "zio-cache" % "@VERSION@"
-)
+// Cache, ScopedCache, Lookup and statistics (JVM)
+libraryDependencies += "dev.zio" %% "zio-cache" % "@VERSION@"
 ```
 
 On Scala.js or Scala Native, use `%%%` instead:
 
 ```scala
-libraryDependencies ++= Seq(
-  // Cache, ScopedCache, Lookup and statistics (Scala.js and Scala Native)
-  "dev.zio" %%% "zio-cache" % "@VERSION@"
-)
+// Cache, ScopedCache, Lookup and statistics (Scala.js and Scala Native)
+libraryDependencies += "dev.zio" %%% "zio-cache" % "@VERSION@"
 ```
 
 ## Learn More
