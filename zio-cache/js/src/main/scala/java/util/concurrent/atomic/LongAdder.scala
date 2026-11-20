@@ -17,7 +17,8 @@
 package java.util.concurrent.atomic
 
 /**
- * An implementation of `LongAdder` for Scala.js.
+ * A minimal `LongAdder` for Scala.js and Scala Native. It supports only
+ * `increment` and `longValue`, and it does not synchronize.
  */
 class LongAdder {
 

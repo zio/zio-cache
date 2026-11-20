@@ -20,5 +20,7 @@ import java.time.Instant
 
 /**
  * `EntryStats` represents a snapshot of statistics for an entry in the cache.
+ * `loaded` is the instant, read from the cache's clock, at which the lookup
+ * that produced the entry's value finished.
  */
 final case class EntryStats(loaded: Instant)
