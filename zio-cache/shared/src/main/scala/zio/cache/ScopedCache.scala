@@ -36,8 +36,8 @@ import scala.jdk.CollectionConverters._
  * closed) and no caller's scope still holds it. A lookup that fails releases
  * its resource right away. Expired entries are dropped by a background sweep
  * that runs about once a second, or by a `get` for that key, so an expired
- * resource can stay open for up to about a second after its time to live
- * passes.
+ * resource can stay open for about a second after its time to live passes, or
+ * until a running refresh of it finishes.
  *
  * {{{
  * import zio._
@@ -103,7 +103,8 @@ abstract class ScopedCache[-Key, +Error, +Value] {
    * computed, `get` still returns the old one unless it has expired.
    *
    * If the lookup fails, the failure replaces the old resource, which is
-   * released, and `get` returns that failure until its time to live passes.
+   * released once no caller's scope holds it, and `get` returns that failure
+   * until its time to live passes.
    *
    * If a lookup for the key is already running, `refresh` waits for it instead
    * of starting another.
@@ -124,7 +125,8 @@ abstract class ScopedCache[-Key, +Error, +Value] {
   /**
    * Returns the approximate number of entries in the cache. Entries whose
    * lookup is still running, and expired entries that have not been removed
-   * yet, by the background sweep or by a `get`, are counted too.
+   * yet, are counted too. An expired entry is removed by the background sweep,
+   * by a `get` or `refresh` of its key, or when it is invalidated or evicted.
    */
   def size: UIO[Int]
 }
