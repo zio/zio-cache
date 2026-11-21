@@ -1013,6 +1013,20 @@ object ScopedCacheSpec extends ZIOSpecDefault {
         cacheStats <- cache.cacheStats
       } yield assertTrue(cacheStats.hits == 0L, cacheStats.misses == 2L)
     },
+    test("a get whose retry finds an expired entry counts one hit or miss") {
+      val hook  = new Hook
+      val clock = new HookedClock(hook)
+      for {
+        watchableLookup <- WatchableLookup.makeUnit
+        cache            = makeWithClock(watchableLookup.lookup, 10.seconds, clock.clock)
+        _               <- ZIO.scoped(cache.get(()))
+        // After `get` finds the entry unexpired: release it, store a new entry, then expire that one before the
+        // retry reads the clock
+        _     <- hook.arm(cache.invalidate(()) *> ZIO.scoped(cache.get(())) *> hook.arm(clock.adjust(11.seconds)))
+        _     <- ZIO.scoped(cache.get(()))
+        stats <- cache.cacheStats
+      } yield assertTrue(stats.hits + stats.misses == 3L)
+    } @@ TestAspect.exceptJS,
     test("contains returns false for expired entries") {
       for {
         // Expires between two runs of the background cleaner, which runs every second
