@@ -62,6 +62,11 @@ private[cache] final class KeySet[Key] {
     }
 
   /**
+   * Returns the lowest priority key of the set, without removing it.
+   */
+  def first: MapKey[Key] = head
+
+  /**
    * Removes the lowest priority key from the set.
    */
   def remove(): MapKey[Key] = {

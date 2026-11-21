@@ -8,6 +8,7 @@ import zio.{Clock, Exit, IO, Scope, UIO, Unsafe, ZEnvironment, ZIO}
 import java.time.{Duration, Instant}
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger, LongAdder}
+import scala.collection.mutable
 import scala.jdk.CollectionConverters._
 
 private final class ScopedCacheImplementation[Key, Environment, Error, Value](
@@ -20,14 +21,37 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   private val cacheState = CacheState.initial[Key, Error, Value]()
   import cacheState._
 
-  private def trackAccess(key: MapKey[Key]): Array[MapValue[Key, Error, Value]] = {
+  private def trackAccess(key: MapKey[Key], evicted: mutable.ArrayBuilder[MapValue[Key, Error, Value]]): Unit = {
     def tryStartProcessingAccesses(): Boolean =
       !accesses.isEmpty() && updating.compareAndSet(false, true)
 
-    val cleanedKey = scala.collection.mutable.ArrayBuilder.make[MapValue[Key, Error, Value]]
-    accesses.offer(key)
-    // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again
-    while (tryStartProcessingAccesses()) {
+    // Read again before each removal, as another fiber can remove an entry during the eviction
+    def overCapacity: Boolean =
+      map.size > capacity
+
+    // The exception of a key whose `hashCode` or `equals` throws while its entry is still in the map
+    var failure: Throwable = null
+
+    // A key whose `hashCode` or `equals` throws is dropped if its entry is gone, as nothing is left to evict. Otherwise
+    // it is kept, and moved last in eviction order so that the eviction goes on with the other keys, and this call then
+    // dies with the exception.
+    def processAccesses(): Unit = {
+      // Whether the map holds the entry tracked by `key`, without hashing it. An entry never comes back under its key
+      // once it is gone, so `false` stays `false`.
+      def holdsEntryOf(key: MapKey[Key]): Boolean = {
+        val values = map.values().iterator()
+        var found  = false
+        while (!found && values.hasNext) found = values.next().key eq key
+        found
+      }
+
+      // A key kept here because its entry is still there: the eviction reaches it in turn
+      def isLiveOrThrows(key: MapKey[Key]): Boolean =
+        try isLive(key)
+        catch {
+          case e: Throwable if isNonFatal(e) => holdsEntryOf(key)
+        }
+
       var loop = true
       while (loop) {
         val key = accesses.poll(null)
@@ -37,42 +61,63 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
           loop = false
         }
       }
-      var size = map.size
+      val size = map.size
       // Keys whose entry is gone or has a newer key stay in the set until they are dropped here
       val tooManyStaleKeys = keys.size > 2 * size
-      if (tooManyStaleKeys) keys.retain(isLive)
+      if (tooManyStaleKeys) keys.retain(isLiveOrThrows)
       loop = size > capacity
+      var firstThrowing: MapKey[Key] = null
       while (loop) {
-        val key = keys.remove()
-        if (key ne null) {
-          val removed = removeEntryOf(key)
-          if (removed ne null) {
-            size -= 1
-            cleanedKey += removed
-            loop = size > capacity
+        // A key leaves the set only once its entry is gone
+        val key = keys.first
+        // Every key left has thrown once the first key that threw is first again
+        val canEvict = (key ne null) && (key ne firstThrowing)
+        if (canEvict) {
+          try {
+            val value = map.get(key.value)
+            if (!isEntryOf(key, value)) {
+              keys.remove()
+            } else if (overCapacity) {
+              // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key: if so, read it again
+              if (map.remove(key.value, value)) {
+                keys.remove()
+                evicted += value
+                loop = overCapacity
+              }
+            } else {
+              loop = false
+            }
+          } catch {
+            case e: Throwable if isNonFatal(e) =>
+              if (holdsEntryOf(key)) {
+                // Moves the key last
+                keys.add(key)
+                failure = e
+                if (firstThrowing eq null) firstThrowing = key
+              } else {
+                keys.remove()
+              }
           }
         } else {
           loop = false
         }
       }
-      updating.set(false)
     }
-    cleanedKey.result()
+
+    accesses.offer(key)
+    // Someone might add a key right after we drain the queue but before we set `updating` to `false`, so check again
+    while (tryStartProcessingAccesses()) {
+      // Reset even if a fatal error is thrown
+      try processAccesses()
+      finally updating.set(false)
+    }
+    // Only once the accesses queued meanwhile are processed
+    if (failure ne null) throw failure
   }
 
-  /**
-   * Removes the entry tracked by `key`, if the map still holds it, and returns
-   * the removed entry, or `null` if there was none.
-   */
-  private def removeEntryOf(key: MapKey[Key]): MapValue[Key, Error, Value] = {
-    def changedBeforeRemove(value: MapValue[Key, Error, Value]): Boolean =
-      isEntryOf(key, value) && !map.remove(key.value, value)
-
-    var value = map.get(key.value)
-    // The entry can change state (e.g. `Pending` to `Complete`) while keeping its key, so the remove is retried
-    while (changedBeforeRemove(value)) value = map.get(key.value)
-    if (isEntryOf(key, value)) value else null
-  }
+  // What ZIO turns into a defect
+  private def isNonFatal(e: Throwable): Boolean =
+    !e.isInstanceOf[VirtualMachineError]
 
   private def isLive(key: MapKey[Key]): Boolean =
     isEntryOf(key, map.get(key.value))
@@ -86,10 +131,22 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   private def trackMiss(): Unit =
     misses.increment()
 
-  private def ensureMapSizeNotExceeded(key: MapKey[Key]): UIO[Unit] =
-    ZIO.foreachParDiscard(trackAccess(key)) { cleanedMapValue =>
-      cleanMapValue(cleanedMapValue)
-    }
+  // Evicts when the effect runs, not when it is built
+  private def ensureMapSizeNotExceeded(key: MapKey[Key]): UIO[Unit] = ZIO.suspendSucceed {
+    val evicted = mutable.ArrayBuilder.make[MapValue[Key, Error, Value]]
+    // The entries evicted before the eviction throws are released before this call dies
+    val eviction =
+      try {
+        trackAccess(key, evicted)
+        Exit.unit
+      } catch {
+        case e: Throwable if isNonFatal(e) => Exit.die(e)
+      }
+    // A failing release must not stop the others, so every entry is released before the failures are reported
+    ZIO
+      .foreachPar(evicted.result().toList)(cleanMapValue(_).exit)
+      .flatMap(exits => Exit.collectAllPar(exits).getOrElse(Exit.unit)) *> eviction
+  }
 
   override def cacheStats: UIO[CacheStats] =
     ZIO.succeed(CacheStats(hits.longValue, misses.longValue, map.size))
@@ -163,7 +220,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
               // Another fiber may have removed and released this entry already
               val removedByThisFiber = map.remove(k, value)
               if (removedByThisFiber) {
-                ensureMapSizeNotExceeded(key) *> complete.releaseOwner.as(restore(get(k)))
+                // The retry tracks the access to the entry it finds
+                complete.releaseOwner.as(restore(get(k)))
               } else {
                 ZIO.succeed(restore(get(k)))
               }

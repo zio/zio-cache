@@ -16,6 +16,15 @@ final class HookKey(val id: Int) {
     hook = () => f
   }
 
+  /**
+   * Makes every later computation of the hash code throw.
+   */
+  def throwOnEveryHash(): Unit =
+    onHash(1) {
+      throwOnEveryHash()
+      throw new RuntimeException("hashCode")
+    }
+
   override def hashCode(): Int = {
     val current = hook
     if (current ne null) {

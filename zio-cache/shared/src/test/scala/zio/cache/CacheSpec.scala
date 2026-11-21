@@ -259,7 +259,123 @@ object CacheSpec extends ZIOSpecDefault {
           completed <- cache.get(new HookKey(3)).disconnect.timeout(10.seconds).map(_.isDefined)
           size      <- cache.size
         } yield assertTrue(completed, size == 2)
-      } @@ TestAspect.withLiveClock
+      } @@ TestAspect.withLiveClock,
+      test("keeps evicting after a key's hashCode throws during an eviction") {
+        for {
+          cache <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          one    = new HookKey(1)
+          three  = new HookKey(3)
+          _     <- cache.get(one) *> cache.get(new HookKey(2))
+          // The eviction triggered by the next get hashes `one` first
+          _     <- ZIO.succeed(one.onHash(1)(throw new RuntimeException("hashCode")))
+          first <- cache.get(three).exit
+          // The get that died still ran its lookup, which the other gets of the key wait for
+          again <- cache.get(three).timeout(10.seconds)
+          _     <- ZIO.foreachDiscard(4 to 10)(i => cache.get(new HookKey(i)))
+          size  <- cache.size
+          // Still tracked, so evicted like the others
+          hasOne <- cache.contains(one)
+        } yield assertTrue(first.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode")) &&
+          assertTrue(again.contains(3), size == 2, !hasOne)
+      } @@ TestAspect.withLiveClock,
+      test("drops a key whose hashCode throws once its entry is gone, while under capacity") {
+        for {
+          cache <- Cache.make(100, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          _ <- ZIO.foreachDiscard(1 to 50) { i =>
+                 val key = new HookKey(i)
+                 cache.get(key) *> cache.invalidate(key) *> ZIO.succeed(key.throwOnEveryHash())
+               }
+          exits <- ZIO.foreach((1 to 4).toList)(_ => cache.get(new HookKey(1000)).exit)
+          size  <- cache.size
+        } yield assertTrue(exits.forall(_.isSuccess), size == 1, keyCount(cache) <= 3)
+      },
+      test("processes the accesses queued while an eviction throws") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          cache   <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          one      = new HookKey(1)
+          _       <- cache.get(one) *> cache.get(new HookKey(2))
+          // The eviction triggered by the next get hashes `one` first: two gets run from there and leave their access
+          // to it, then `one` throws
+          _ <- ZIO.succeed(one.onHash(1) {
+                 Unsafe.unsafe { implicit unsafe =>
+                   runtime.unsafe.run(cache.get(new HookKey(5))).getOrThrowFiberFailure()
+                   runtime.unsafe.run(cache.get(new HookKey(6))).getOrThrowFiberFailure()
+                 }
+                 throw new RuntimeException("hashCode")
+               })
+          third <- cache.get(new HookKey(3)).exit
+          size  <- cache.size
+        } yield assertTrue(third.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode"), size == 2)
+      },
+      test("drops a key whose hashCode throws once its entry is gone") {
+        def evictsAfter(remove: (Cache[HookKey, Nothing, Int], HookKey) => UIO[Unit]) =
+          for {
+            cache <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+            one    = new HookKey(1)
+            _     <- cache.get(one) *> cache.get(new HookKey(2))
+            _     <- remove(cache, one)
+            // `one` still tracks the entry removed above
+            _     <- ZIO.succeed(one.throwOnEveryHash())
+            exits <- ZIO.foreach((3 to 20).toList)(i => cache.get(new HookKey(i)).exit)
+            size  <- cache.size
+          } yield assertTrue(exits.forall(_.isSuccess), size == 2)
+        evictsAfter((cache, _) => cache.invalidateAll).zipWith(evictsAfter(_.invalidate(_)))(_ && _)
+      },
+      test("keeps its capacity when a key's hashCode always throws during evictions") {
+        for {
+          cache <- Cache.make(2, Duration.Infinity, Lookup((key: EvictionThrowingKey) => ZIO.succeed(key.id)))
+          one    = new EvictionThrowingKey(1)
+          _     <- cache.get(one) *> cache.get(new EvictionThrowingKey(2))
+          _     <- ZIO.succeed(one.throwsDuringEviction = true)
+          exits <- ZIO.foreach((3 to 10).toList)(i => cache.get(new EvictionThrowingKey(i)).exit)
+          size  <- cache.size
+          // `one` stays, and every other get finds it first in eviction order: it is moved last, and the others evicted
+          died = exits.count(_.isFailure)
+          // After `invalidateAll`, `one` is a stale key that throws whenever the gets below drop stale keys
+          _ <- cache.invalidateAll
+          later <- ZIO.foreach((11 to 14).toList) { i =>
+                     val key = new EvictionThrowingKey(i)
+                     cache.get(key).exit <* cache.invalidate(key)
+                   }
+        } yield assertTrue(size == 2, died == 4, later == (11 to 14).toList.map(Exit.succeed(_)))
+      } @@ TestAspect.jvmOnly,
+      test("a get whose eviction throws counts one hit or miss") {
+        for {
+          cache <- Cache.make(1, 10.seconds, Lookup((key: EvictionThrowingKey) => ZIO.succeed(key.id)))
+          one    = new EvictionThrowingKey(1)
+          two    = new EvictionThrowingKey(2)
+          _     <- cache.get(one)
+          _     <- ZIO.succeed { one.throwsDuringEviction = true; two.throwsDuringEviction = true }
+          // Every key throws, so each of these evictions dies without removing anything: a miss, then two hits
+          _ <- cache.get(two).exit *> cache.get(two).exit *> cache.get(one).exit
+          // `one` has expired: the get removes it and looks it up again, a miss
+          _     <- TestClock.adjust(11.seconds)
+          _     <- cache.get(one).exit
+          stats <- cache.cacheStats
+        } yield assertTrue(stats.hits == 2L, stats.misses == 3L)
+      } @@ TestAspect.jvmOnly,
+      test("does not evict an entry when an invalidation during the eviction makes room") {
+        for {
+          runtime <- ZIO.runtime[Any]
+          cache   <- Cache.make(2, Duration.Infinity, Lookup((key: HookKey) => ZIO.succeed(key.id)))
+          one      = new HookKey(1)
+          two      = new HookKey(2)
+          three    = new HookKey(3)
+          _       <- cache.get(one) *> cache.get(two)
+          // The eviction triggered by the next get hashes `one` to read its entry: invalidate `two` from there
+          _ <- ZIO.succeed(one.onHash(1) {
+                 Unsafe.unsafe(implicit unsafe => runtime.unsafe.run(cache.invalidate(two)).getOrThrowFiberFailure())
+               })
+          _      <- cache.get(three)
+          size   <- cache.size
+          hasOne <- cache.contains(one)
+          // `one` is still the least recently used entry
+          _          <- cache.get(new HookKey(4))
+          stillOne   <- cache.contains(one)
+          stillThree <- cache.contains(three)
+        } yield assertTrue(size == 2, hasOne, !stillOne, stillThree)
+      }
     ),
     suite("lookup in progress")(
       test("does not store its result if the entry is invalidated") {

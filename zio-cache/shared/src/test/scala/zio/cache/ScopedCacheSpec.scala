@@ -1001,7 +1001,188 @@ object ScopedCacheSpec extends ZIOSpecDefault {
           }
         }
         // The hook runs `refresh` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
-      } @@ TestAspect.exceptJS
+      } @@ TestAspect.exceptJS,
+      test("keeps evicting after a key's hashCode throws during an eviction") {
+        ZIO.scoped {
+          ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap { cache =>
+            val one   = new HookKey(1)
+            val three = new HookKey(3)
+            for {
+              _ <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(new HookKey(2)))
+              // The eviction triggered by the next get hashes `one` first
+              _     <- ZIO.succeed(one.onHash(1)(throw new RuntimeException("hashCode")))
+              first <- ZIO.scoped(cache.get(three)).exit
+              again <- ZIO.scoped(cache.get(three))
+              _     <- ZIO.foreachDiscard(4 to 10)(i => ZIO.scoped(cache.get(new HookKey(i))))
+              size  <- cache.size
+            } yield assertTrue(first.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode")) &&
+              assertTrue(again == 3, size == 2)
+          }
+        }
+      },
+      test("releases the entry it evicts after a key's hashCode throws") {
+        for {
+          released <- Ref.make(List.empty[Int])
+          lookup    = (key: HookKey) => ZIO.acquireRelease(ZIO.succeed(key.id))(id => released.update(id :: _))
+          cache     = makeWithClock(lookup, Duration.Infinity, Clock.ClockLive, capacity = 2)
+          one       = new HookKey(1)
+          _        <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(new HookKey(2)))
+          // The eviction triggered by the next get hashes `one` first, then evicts `2` instead. `NonFatal` does not match
+          // a `LinkageError`, but ZIO turns it into a defect.
+          _     <- ZIO.succeed(one.onHash(1)(throw new LinkageError("hashCode")))
+          third <- ZIO.scoped(cache.get(new HookKey(3))).exit
+          keys  <- released.get
+        } yield assertTrue(third.isFailure, keys == List(2))
+      },
+      test("releases an expired entry and counts one miss when the eviction throws") {
+        val clock = new HookedClock(new Hook)
+        for {
+          released <- Ref.make(List.empty[Int])
+          lookup =
+            (key: EvictionThrowingKey) => ZIO.acquireRelease(ZIO.succeed(key.id))(id => released.update(id :: _))
+          cache = makeWithClock(lookup, 10.seconds, clock.clock, capacity = 1)
+          keys  = (1 to 3).toList.map(new EvictionThrowingKey(_))
+          _    <- ZIO.scoped(cache.get(keys.head))
+          _    <- clock.adjust(11.seconds)
+          // Every key throws, so these evictions die without removing anything: the cache holds 1, 2 and 3
+          _ <- ZIO.succeed(keys.foreach(_.throwsDuringEviction = true))
+          _ <- ZIO.foreachDiscard(keys.tail)(key => ZIO.scoped(cache.get(key)).exit)
+          // The get removes the expired entry, then looks it up again and dies in the eviction
+          again <- ZIO.scoped(cache.get(keys.head)).exit
+          ids   <- released.get
+          stats <- cache.cacheStats
+        } yield assertTrue(again.isFailure, ids == List(1), stats.hits == 0L, stats.misses == 4L)
+      } @@ TestAspect.jvmOnly,
+      test("drops a key whose hashCode throws once its entry is gone, while under capacity") {
+        ZIO.scoped {
+          ScopedCache.make(100, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap {
+            cache =>
+              for {
+                _ <- ZIO.foreachDiscard(1 to 50) { i =>
+                       val key = new HookKey(i)
+                       ZIO.scoped(cache.get(key)) *> cache.invalidate(key) *> ZIO.succeed(key.throwOnEveryHash())
+                     }
+                exits <- ZIO.foreach((1 to 4).toList)(_ => ZIO.scoped(cache.get(new HookKey(1000))).exit)
+                size  <- cache.size
+              } yield assertTrue(exits.forall(_.isSuccess), size == 1, keyCount(cache) <= 3)
+          }
+        }
+      },
+      test("processes the accesses queued while an eviction throws") {
+        ZIO.scoped {
+          ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap { cache =>
+            for {
+              runtime <- ZIO.runtime[Any]
+              one      = new HookKey(1)
+              _       <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(new HookKey(2)))
+              // The eviction triggered by the next get hashes `one` first: two gets run from there and leave their
+              // access to it, then `one` throws
+              _ <- ZIO.succeed(one.onHash(1) {
+                     Unsafe.unsafe { implicit unsafe =>
+                       runtime.unsafe.run(ZIO.scoped(cache.get(new HookKey(5)))).getOrThrowFiberFailure()
+                       runtime.unsafe.run(ZIO.scoped(cache.get(new HookKey(6)))).getOrThrowFiberFailure()
+                     }
+                     throw new RuntimeException("hashCode")
+                   })
+              third <- ZIO.scoped(cache.get(new HookKey(3))).exit
+              size  <- cache.size
+            } yield assertTrue(third.causeOption.flatMap(_.dieOption).exists(_.getMessage == "hashCode"), size == 2)
+          }
+        }
+        // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+      } @@ TestAspect.exceptJS,
+      test("drops a key whose hashCode throws once its entry is gone") {
+        def evictsAfter(remove: (ScopedCache[HookKey, Nothing, Int], HookKey) => UIO[Unit]) =
+          ZIO.scoped {
+            ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap {
+              cache =>
+                val one = new HookKey(1)
+                for {
+                  _ <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(new HookKey(2)))
+                  _ <- remove(cache, one)
+                  // `one` still tracks the entry removed above
+                  _     <- ZIO.succeed(one.throwOnEveryHash())
+                  exits <- ZIO.foreach((3 to 20).toList)(i => ZIO.scoped(cache.get(new HookKey(i))).exit)
+                  size  <- cache.size
+                } yield assertTrue(exits.forall(_.isSuccess), size == 2)
+            }
+          }
+        evictsAfter((cache, _) => cache.invalidateAll).zipWith(evictsAfter(_.invalidate(_)))(_ && _)
+      },
+      test("keeps its capacity when a key's hashCode always throws during evictions") {
+        ZIO.scoped {
+          ScopedCache
+            .make(2, Duration.Infinity, ScopedLookup((key: EvictionThrowingKey) => ZIO.succeed(key.id)))
+            .flatMap { cache =>
+              val one = new EvictionThrowingKey(1)
+              for {
+                _     <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(new EvictionThrowingKey(2)))
+                _     <- ZIO.succeed(one.throwsDuringEviction = true)
+                exits <- ZIO.foreach((3 to 10).toList)(i => ZIO.scoped(cache.get(new EvictionThrowingKey(i))).exit)
+                size  <- cache.size
+                // `one` stays, and every other get finds it first in eviction order: it is moved last, and the
+                // others evicted
+                died = exits.count(_.isFailure)
+                // After `invalidateAll`, `one` is a stale key that throws whenever the gets below drop stale keys
+                _ <- cache.invalidateAll
+                later <- ZIO.foreach((11 to 14).toList) { i =>
+                           val key = new EvictionThrowingKey(i)
+                           ZIO.scoped(cache.get(key)).exit <* cache.invalidate(key)
+                         }
+              } yield assertTrue(size == 2, died == 4, later == (11 to 14).toList.map(Exit.succeed(_)))
+            }
+        }
+      } @@ TestAspect.jvmOnly,
+      test("releases every entry it evicts when a release dies") {
+        for {
+          runtime  <- ZIO.runtime[Any]
+          released <- Ref.make(List.empty[Int])
+          lookup = (key: HookKey) =>
+                     ZIO.acquireRelease(ZIO.succeed(key.id)) { id =>
+                       if (id == 1) ZIO.die(new RuntimeException("release")) else released.update(id :: _)
+                     }
+          cache = makeWithClock(lookup, Duration.Infinity, Clock.ClockLive, capacity = 1)
+          one   = new HookKey(1)
+          _    <- ZIO.scoped(cache.get(one))
+          // The eviction triggered by the next get hashes `one` to read its entry: add `2` and `3` from there, which do
+          // not evict while the eviction runs, so the eviction removes `one`, `4` and `2`
+          _ <- ZIO.succeed(one.onHash(1) {
+                 Unsafe.unsafe { implicit unsafe =>
+                   runtime.unsafe.run(ZIO.scoped(cache.get(new HookKey(2)))).getOrThrowFiberFailure()
+                   runtime.unsafe.run(ZIO.scoped(cache.get(new HookKey(3)))).getOrThrowFiberFailure()
+                 }
+               })
+          // Releases one at a time, so a release that stops the others would leak them
+          fourth <- ZIO.withParallelism(1)(ZIO.scoped(cache.get(new HookKey(4)))).exit
+          ids    <- released.get
+        } yield assertTrue(fourth.isFailure, ids == List(2))
+        // The hook runs `get` synchronously, which JS cannot do: running a memoized lookup is asynchronous there
+      } @@ TestAspect.exceptJS,
+      test("does not evict an entry when an invalidation during the eviction makes room") {
+        ZIO.scoped {
+          ScopedCache.make(2, Duration.Infinity, ScopedLookup((key: HookKey) => ZIO.succeed(key.id))).flatMap { cache =>
+            for {
+              runtime <- ZIO.runtime[Any]
+              one      = new HookKey(1)
+              two      = new HookKey(2)
+              three    = new HookKey(3)
+              _       <- ZIO.scoped(cache.get(one)) *> ZIO.scoped(cache.get(two))
+              // The eviction triggered by the next get hashes `one` to read its entry: invalidate `two` from there
+              _ <- ZIO.succeed(one.onHash(1) {
+                     Unsafe
+                       .unsafe(implicit unsafe => runtime.unsafe.run(cache.invalidate(two)).getOrThrowFiberFailure())
+                   })
+              _      <- ZIO.scoped(cache.get(three))
+              size   <- cache.size
+              hasOne <- cache.contains(one)
+              // `one` is still the least recently used entry
+              _          <- ZIO.scoped(cache.get(new HookKey(4)))
+              stillOne   <- cache.contains(one)
+              stillThree <- cache.contains(three)
+            } yield assertTrue(size == 2, hasOne, !stillOne, stillThree)
+          }
+        }
+      }
     ),
     test("cache hits should not be incremented for expired entries") {
       for {
@@ -1506,15 +1687,16 @@ object ScopedCacheSpec extends ZIOSpecDefault {
   )
 
   /**
-   * Builds the cache without the background cleaner, with a capacity of 10.
+   * Builds the cache without the background cleaner.
    */
   private def makeWithClock[Key, Value](
     lookup: Key => ZIO[Scope, Nothing, Value],
     timeToLive: Duration,
-    clock: Clock
+    clock: Clock,
+    capacity: Int = 10
   ): ScopedCacheImplementation[Key, Any, Nothing, Value] =
     new ScopedCacheImplementation[Key, Any, Nothing, Value](
-      10,
+      capacity,
       ScopedLookup[Key, Any, Nothing, Value](lookup),
       _ => timeToLive,
       clock,
