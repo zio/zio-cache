@@ -72,7 +72,26 @@ object CacheSpec extends ZIOSpecDefault {
             expected <- ZIO.foreachPar(1 to 100)(hash(salt))
           } yield assertTrue(actual == expected)
         }
-      }
+      },
+      test("jitter") {
+        check(Gen.int(20, 100)) { duration =>
+          for {
+            ref          <- Ref.make(0)
+            lookup        = Lookup((n: Int) => ref.updateAndGet(_ + 1).as(n))
+            cache        <- Cache.makeWith(10, lookup)(TimeToLive.jittered(_ => duration.seconds, 1, 2))
+            _            <- cache.get(1)
+            lookupCount1 <- ref.get
+            _            <- TestClock.adjust((duration / 10).seconds)
+            _            <- cache.get(1)
+            lookupCount2 <- ref.get
+            _            <- TestClock.adjust((duration * 2).seconds)
+            _            <- cache.get(1)
+            lookupCount3 <- ref.get
+          } yield assertTrue(
+            lookupCount1 == 1 && lookupCount2 == 1 && lookupCount3 == 2
+          )
+        }
+      } @@ TestAspect.samples(10)
     ),
     suite("`refresh` method")(
       test("should update the cache with a new value") {
