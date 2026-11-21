@@ -74,6 +74,10 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     if (isEntryOf(key, value)) value else null
   }
 
+  // What ZIO turns into a defect
+  private def isNonFatal(e: Throwable): Boolean =
+    !e.isInstanceOf[VirtualMachineError]
+
   private def isLive(key: MapKey[Key]): Boolean =
     isEntryOf(key, map.get(key.value))
 
@@ -251,9 +255,9 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
     ZIO.suspendSucceed {
       val scope   = Scope.unsafe.make(Unsafe)
       val release = scope.close(_)
-      restore(scopedLookup(key))
-        .provideEnvironment(environment.unsafe.addScope(scope)(Unsafe))
-        .exitWith {
+
+      def endLookup(exit: Exit[Error, Value]): UIO[ZIO[Scope, Error, Value]] =
+        exit match {
           case exit @ Exit.Success(value) =>
             val now       = clock.unsafe.instant()(Unsafe)
             val expiredAt = now.plus(timeToLive(exit))
@@ -290,7 +294,26 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
             val current  = map.get(key)
             val isStored = isEntryOf(mapKey, current) && map.replace(key, current, completedResult)
             val replaced = if (isStored) cleanMapValue(current) else Exit.unit
-            release(exit) *> replaced.as(completedResult.toScoped(getAgainAfterRelease(key)))
+            // The value this failure replaces is released even if a finalizer of the failed lookup fails
+            release(exit).ensuring(replaced).as(completedResult.toScoped(getAgainAfterRelease(key)))
+        }
+
+      restore(scopedLookup(key))
+        .provideEnvironment(environment.unsafe.addScope(scope)(Unsafe))
+        .exitWith { exit =>
+          try endLookup(exit)
+          catch {
+            // `timeToLive` or the key's `hashCode` or `equals` threw before the result was stored or the resource
+            // released. The lookup dies, and so do the fibers waiting for it. Its entry is undone, so that the next
+            // `get` looks it up again, and its resource is released.
+            case e: Throwable if isNonFatal(e) =>
+              val died = Exit.die(e)
+              val undo = ZIO.succeed {
+                val current = map.get(key)
+                if (isEntryOf(mapKey, current)) undoLookup(key, current)
+              }
+              (undo *> died).ensuring(release(died))
+          }
         }
     }
 
@@ -310,8 +333,8 @@ private final class ScopedCacheImplementation[Key, Environment, Error, Value](
   }
 
   /**
-   * Undoes the entry of an interrupted lookup. An interrupted refresh keeps
-   * the value it was refreshing.
+   * Undoes the entry of a lookup that is interrupted or dies before its result
+   * is stored. Such a refresh keeps the value it was refreshing.
    */
   private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Unit =
     value match {

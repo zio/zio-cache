@@ -273,10 +273,9 @@ object Cache {
 
     private def lookupValueOf(in: In, key: Key, mapKey: MapKey[Key], promise: Promise[Error, Value])(implicit
       restore: ZIO.InterruptibilityRestorer
-    ): IO[Error, Value] =
-      restore(lookup(in))
-        .provideEnvironment(environment)
-        .exitWith {
+    ): IO[Error, Value] = {
+      def endLookup(exit: Exit[Error, Value]): IO[Error, Value] =
+        exit match {
           case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
             val interrupter = c.interruptOption.getOrElse(fiberId)
             promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
@@ -296,9 +295,27 @@ object Cache {
             exit
         }
 
+      restore(lookup(in))
+        .provideEnvironment(environment)
+        .exitWith { exit =>
+          try endLookup(exit)
+          catch {
+            // `timeToLive` or the key's `hashCode` or `equals` threw before the result was stored or the entry undone.
+            // The lookup dies, and so do the fibers waiting for it, unless they were already given its interruption.
+            // Its entry is undone, so that the next `get` looks it up again.
+            case e: Throwable if isNonFatal(e) =>
+              val died = Exit.die(e)
+              promise.unsafe.done(died)(Unsafe)
+              val current = map.get(key)
+              if (isEntryOf(mapKey, current)) undoLookup(key, current)
+              died
+          }
+        }
+    }
+
     /**
-     * Undoes the entry of an interrupted lookup. An interrupted refresh keeps
-     * the value it was refreshing.
+     * Undoes the entry of a lookup that is interrupted or dies before its
+     * result is stored. Such a refresh keeps the value it was refreshing.
      */
     private def undoLookup(key: Key, value: MapValue[Key, Error, Value]): Unit =
       value match {
@@ -364,6 +381,10 @@ object Cache {
       while (changedBeforeRemove(value)) value = map.get(key.value)
       isEntryOf(key, value)
     }
+
+    // What ZIO turns into a defect
+    private def isNonFatal(e: Throwable): Boolean =
+      !e.isInstanceOf[VirtualMachineError]
 
     private def isLive(key: MapKey[Key]): Boolean =
       isEntryOf(key, map.get(key.value))
