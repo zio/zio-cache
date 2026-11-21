@@ -111,7 +111,13 @@ object ScopedCache {
     scopedCache: ScopedCacheImplementation[Key, Error, Value, Environment]
   ): URIO[Scope, Fiber.Runtime[Nothing, Long]] = {
     val cleaningInterval = 1.second
-    (scopedCache.freeExpired *> ZIO.sleep(cleaningInterval)).forever.interruptible.forkScoped
+    // A release or a key that fails is logged, and does not stop the cleaner: `freeExpired` already released every
+    // entry it removed. Uninterruptible, so that the failure is logged even when the cache is closed during a release.
+    val freeExpired =
+      scopedCache.freeExpired
+        .catchAllCause(ZIO.logErrorCause("ScopedCache failed to release expired entries", _))
+        .uninterruptible
+    (freeExpired *> ZIO.sleep(cleaningInterval)).forever.interruptible.forkScoped
   }
 
   private def buildWith[Key, Environment, Error, Value](
