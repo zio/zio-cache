@@ -95,6 +95,26 @@ abstract class Cache[-Key, +Error, +Value] {
   def size(implicit trace: Trace): UIO[Int]
 }
 
+object TimeToLive {
+
+  /**
+   * Returns a TTL function that adds randomized jitter to the base time to live.
+   *
+   * The `min` and `max` parameters control the bounds within which the base time to live
+   * is randomly scaled.
+   */
+  def jittered[Value](
+    timeToLive: Exit[Nothing, Value] => Duration,
+    min: Double,
+    max: Double
+  ): Exit[Nothing, Value] => Duration = { (exit: Exit[Nothing, Value]) =>
+    val d        = timeToLive(exit).toNanos
+    val random   = scala.util.Random.nextDouble()
+    val jittered = d * min * (1 - random) + d * max * random
+    zio.Duration.fromNanos(jittered.toLong)
+  }
+}
+
 object Cache {
 
   /**
