@@ -19,5 +19,11 @@ package zio.cache
 /**
  * `CacheStats` represents a snapshot of statistics for the cache as of a
  * point in time.
+ *
+ * `hits` counts the `get` calls that found an unexpired entry, or an entry
+ * whose lookup or refresh was running. `misses` counts the `get` calls that ran
+ * the lookup, including those that found an expired entry, and the `refresh`
+ * calls on an expired entry. `size` is the number of entries, as in
+ * `Cache#size`.
  */
 final case class CacheStats(hits: Long, misses: Long, size: Int)
