@@ -4,6 +4,8 @@ import zio._
 import zio.test.Assertion._
 import zio.test._
 
+import java.util.concurrent.atomic.AtomicBoolean
+
 object CacheSpec extends ZIOSpecDefault {
 
   def hash(x: Int): Int => UIO[Int] =
@@ -363,8 +365,127 @@ object CacheSpec extends ZIOSpecDefault {
           n        <- calls.get
         } yield assertTrue(contains, n == 2)
       }
+    ),
+    suite("time to live or key that throws")(
+      test("a get dies with the exception of the time to live, and the next get looks the key up again") {
+        val failTimeToLive = new AtomicBoolean(true)
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          lookup   = Lookup((key: Int) => calls.update(_ + 1) *> started.succeed(()) *> gate.await.as(key))
+          cache <- Cache.makeWith(100, lookup) { _ =>
+                     if (failTimeToLive.getAndSet(false)) throw new RuntimeException("time to live failed")
+                     else Duration.Infinity
+                   }
+          first  <- cache.get(1).exit.fork
+          _      <- started.await
+          waiter <- cache.get(1).exit.fork
+          _      <- waiter.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+          _      <- gate.succeed(())
+          exits  <- first.join.zip(waiter.join).timeout(5.seconds)
+          next   <- cache.get(1).timeout(5.seconds)
+          n      <- calls.get
+        } yield assertTrue(
+          exits.exists { case (firstExit, waiterExit) =>
+            diedWith("time to live failed")(firstExit) && diedWith("time to live failed")(waiterExit)
+          },
+          next.contains(1),
+          n == 2
+        )
+      } @@ TestAspect.withLiveClock,
+      test("a refresh whose time to live throws keeps the previous value") {
+        val failTimeToLive = new AtomicBoolean(false)
+        for {
+          calls <- Ref.make(0)
+          cache <- Cache.makeWith(100, Lookup((_: Int) => calls.updateAndGet(_ + 1))) { _ =>
+                     if (failTimeToLive.getAndSet(false)) throw new RuntimeException("time to live failed")
+                     else 10.seconds
+                   }
+          _         <- cache.get(1)
+          _         <- ZIO.succeed(failTimeToLive.set(true))
+          refreshed <- cache.refresh(1).exit
+          previous  <- cache.get(1)
+          _         <- TestClock.adjust(11.seconds)
+          // The previous value expired, so this get looks the key up again
+          next <- Live.live(cache.get(1).timeout(5.seconds))
+        } yield assertTrue(diedWith("time to live failed")(refreshed), previous == 1, next.contains(3))
+      },
+      test("a get dies with the exception of the key, and the next get looks the key up again") {
+        val key = new HookKey(1)
+        for {
+          calls <- Ref.make(0)
+          lookup = Lookup { (key: HookKey) =>
+                     calls.getAndUpdate(_ + 1).map { n =>
+                       // The next hash of the key is the one that stores the result
+                       if (n == 0) key.onHash(1)(throw new RuntimeException("hash code failed"))
+                       key.id
+                     }
+                   }
+          cache <- Cache.make(100, Duration.Infinity, lookup)
+          first <- cache.get(key).exit
+          next  <- cache.get(key).timeout(5.seconds)
+          n     <- calls.get
+        } yield assertTrue(diedWith("hash code failed")(first), next.contains(1), n == 2)
+      } @@ TestAspect.withLiveClock,
+      test("a get whose key throws when its result is stored and when its entry is undone completes its waiters") {
+        val key = new HookKey(1)
+        for {
+          started <- Promise.make[Nothing, Unit]
+          gate    <- Promise.make[Nothing, Unit]
+          calls   <- Ref.make(0)
+          lookup = Lookup { (key: HookKey) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       // The next hash of the key stores the result, and the one after it undoes the entry
+                       val failNextTwoHashes = ZIO.succeed(key.onHash(1) {
+                         key.onHash(1)(throw new RuntimeException("hash code failed again"))
+                         throw new RuntimeException("hash code failed")
+                       })
+                       if (n == 0) started.succeed(()) *> gate.await *> failNextTwoHashes.as(key.id)
+                       else ZIO.succeed(key.id)
+                     }
+                   }
+          cache      <- Cache.make(100, Duration.Infinity, lookup)
+          first      <- cache.get(key).exit.fork
+          _          <- started.await
+          waiter     <- cache.get(key).exit.fork
+          _          <- waiter.status.repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+          _          <- gate.succeed(())
+          firstExit  <- first.join.timeout(5.seconds)
+          waiterExit <- waiter.join.timeout(5.seconds)
+          // The entry could not be undone, so it is invalidated
+          _     <- cache.invalidate(key)
+          after <- cache.get(key).timeout(5.seconds)
+        } yield assertTrue(
+          firstExit.exists(_.isFailure),
+          waiterExit.exists(diedWith("hash code failed")),
+          after.contains(1)
+        )
+      } @@ TestAspect.withLiveClock,
+      test("an interrupted get whose key throws when its entry is undone lets the next get look the key up again") {
+        val key = new HookKey(1)
+        for {
+          started <- Promise.make[Nothing, Unit]
+          calls   <- Ref.make(0)
+          lookup = Lookup { (key: HookKey) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       // The next hash of the key is the one that undoes the entry
+                       val failNextHash = ZIO.succeed(key.onHash(1)(throw new RuntimeException("hash code failed")))
+                       if (n == 0) failNextHash *> started.succeed(()) *> ZIO.never else ZIO.succeed(key.id)
+                     }
+                   }
+          cache <- Cache.make(100, Duration.Infinity, lookup)
+          fiber <- cache.get(key).fork
+          _     <- started.await
+          _     <- fiber.interrupt
+          next  <- cache.get(key).timeout(5.seconds)
+        } yield assertTrue(next.contains(1))
+      } @@ TestAspect.withLiveClock
     )
   )
+
+  private def diedWith(message: String)(exit: Exit[Any, Any]): Boolean =
+    exit.causeOption.flatMap(_.dieOption).exists(_.getMessage == message)
 
   private def keyCount(cache: Cache[?, ?, ?]): Int =
     cache.asInstanceOf[Cache.CacheImplementation[?, ?, ?, ?, ?]].keyCount

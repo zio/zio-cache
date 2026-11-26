@@ -22,7 +22,7 @@ import zio.{
 }
 
 import java.time.{Instant, ZoneId, ZoneOffset}
-import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicReference}
 
 object ScopedCacheSpec extends ZIOSpecDefault {
   override def spec: Spec[TestEnvironment with Scope, Any] = suite("SharedScoped")(
@@ -1350,6 +1350,174 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                       }
                     }
         } yield result
+      },
+      test("a refresh whose lookup fails and whose finalizer dies releases the previous value") {
+        for {
+          previous <- ObservableResourceForTest.make(1)
+          calls    <- Ref.make(0)
+          lookup = ScopedLookup { (_: Int) =>
+                     val failWithDyingFinalizer =
+                       ZIO.addFinalizer(ZIO.die(new RuntimeException("finalizer failed"))) *> ZIO.fail("lookup failed")
+                     calls.getAndUpdate(_ + 1).flatMap(n => if (n == 0) previous.managed else failWithDyingFinalizer)
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          _         <- ZIO.scoped(cache.get(1))
+                          refreshed <- cache.refresh(1).exit
+                          cleaned   <- previous.assertAcquiredOnceAndCleaned
+                        } yield assertTrue(refreshed.isFailure) && cleaned
+                      }
+                    }
+        } yield result
+      }
+    ),
+    suite("time to live or key that throws")(
+      test("a lookup whose time to live fails releases its resource and is looked up again") {
+        val failTimeToLive = new AtomicBoolean(true)
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          calls    <- Ref.make(0)
+          lookup    = (_: Int) => calls.getAndUpdate(_ + 1).flatMap(n => if (n == 0) resource.managed else ZIO.succeed(2))
+          cache = new ScopedCacheImplementation[Int, Any, Nothing, Int](
+                    10,
+                    ScopedLookup[Int, Any, Nothing, Int](lookup),
+                    _ =>
+                      if (failTimeToLive.getAndSet(false)) throw new RuntimeException("time to live failed")
+                      else Duration.Infinity,
+                    Clock.ClockLive,
+                    ZEnvironment.empty
+                  )
+          first   <- ZIO.scoped(cache.get(1)).exit
+          second  <- ZIO.scoped(cache.get(1)).exit
+          cleaned <- resource.assertAcquiredOnceAndCleaned
+        } yield assertTrue(diedWith("time to live failed")(first), second == Exit.succeed(2)) && cleaned
+      },
+      test("a failed lookup whose time to live fails releases its resource and is looked up again") {
+        val failTimeToLive = new AtomicBoolean(true)
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          calls    <- Ref.make(0)
+          lookup = (_: Int) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       if (n == 0) resource.managed *> ZIO.fail("lookup failed") else ZIO.succeed(2)
+                     }
+          cache = new ScopedCacheImplementation[Int, Any, String, Int](
+                    10,
+                    ScopedLookup[Int, Any, String, Int](lookup),
+                    _ =>
+                      if (failTimeToLive.getAndSet(false)) throw new RuntimeException("time to live failed")
+                      else Duration.Infinity,
+                    Clock.ClockLive,
+                    ZEnvironment.empty
+                  )
+          first   <- ZIO.scoped(cache.get(1)).exit
+          second  <- ZIO.scoped(cache.get(1)).exit
+          cleaned <- resource.assertAcquiredOnceAndCleaned
+        } yield assertTrue(diedWith("time to live failed")(first), second == Exit.succeed(2)) && cleaned
+      },
+      test("a refresh whose time to live fails releases its resource and keeps the previous value") {
+        val failTimeToLive = new AtomicBoolean(false)
+        for {
+          previous <- ObservableResourceForTest.make(1)
+          next     <- ObservableResourceForTest.make(2)
+          calls    <- Ref.make(0)
+          lookup = (_: Int) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       if (n == 0) previous.managed else if (n == 1) next.managed else ZIO.succeed(3)
+                     }
+          cache = new ScopedCacheImplementation[Int, Any, Nothing, Int](
+                    10,
+                    ScopedLookup[Int, Any, Nothing, Int](lookup),
+                    _ =>
+                      if (failTimeToLive.getAndSet(false)) throw new RuntimeException("time to live failed")
+                      else Duration.Infinity,
+                    Clock.ClockLive,
+                    ZEnvironment.empty
+                  )
+          _               <- ZIO.scoped(cache.get(1))
+          _               <- ZIO.succeed(failTimeToLive.set(true))
+          refreshed       <- cache.refresh(1).exit
+          kept            <- ZIO.scoped(cache.get(1))
+          nextCleaned     <- next.assertAcquiredOnceAndCleaned
+          previousHeld    <- previous.assertAcquiredOnceAndNotCleaned
+          _               <- cache.refresh(1)
+          value           <- ZIO.scoped(cache.get(1))
+          previousCleaned <- previous.assertAcquiredOnceAndCleaned
+        } yield assertTrue(diedWith("time to live failed")(refreshed), kept == 1, value == 3) &&
+          nextCleaned && previousHeld && previousCleaned
+      },
+      test("a lookup whose key fails when its result is stored releases its resource and is looked up again") {
+        val key = new HookKey(1)
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          calls    <- Ref.make(0)
+          lookup = ScopedLookup { (key: HookKey) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       // The next hash of the key is the one that stores the result
+                       val failNextHash = ZIO.succeed(key.onHash(1)(throw new RuntimeException("hash code failed")))
+                       if (n == 0) resource.managed <* failNextHash else ZIO.succeed(2)
+                     }
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          first   <- ZIO.scoped(cache.get(key)).exit
+                          second  <- ZIO.scoped(cache.get(key)).exit
+                          cleaned <- resource.assertAcquiredOnceAndCleaned
+                        } yield assertTrue(diedWith("hash code failed")(first), second == Exit.succeed(2)) && cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("a lookup whose key fails when its result is stored and when its entry is undone releases its resource") {
+        val key = new HookKey(1)
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          lookup = ScopedLookup { (key: HookKey) =>
+                     // The next hash of the key stores the result, and the one after it undoes the entry
+                     val failNextTwoHashes = ZIO.succeed(key.onHash(1) {
+                       key.onHash(1)(throw new RuntimeException("hash code failed again"))
+                       throw new RuntimeException("hash code failed")
+                     })
+                     resource.managed <* failNextTwoHashes
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          first   <- ZIO.scoped(cache.get(key)).exit
+                          cleaned <- resource.assertAcquiredOnceAndCleaned
+                        } yield assertTrue(first.isFailure) && cleaned
+                      }
+                    }
+        } yield result
+      },
+      test("an interrupted lookup whose key fails when its entry is undone releases its resource") {
+        val key = new HookKey(1)
+        for {
+          resource <- ObservableResourceForTest.make(1)
+          calls    <- Ref.make(0)
+          started  <- Promise.make[Nothing, Unit]
+          lookup = ScopedLookup { (key: HookKey) =>
+                     calls.getAndUpdate(_ + 1).flatMap { n =>
+                       // The next hash of the key is the one that undoes the entry
+                       val failNextHash = ZIO.succeed(key.onHash(1)(throw new RuntimeException("hash code failed")))
+                       if (n == 0) resource.managed *> failNextHash *> started.succeed(()) *> ZIO.never
+                       else ZIO.succeed(2)
+                     }
+                   }
+          result <- ZIO.scoped {
+                      ScopedCache.make(100, Duration.Infinity, lookup).flatMap { cache =>
+                        for {
+                          fiber   <- ZIO.scoped(cache.get(key)).fork
+                          _       <- started.await
+                          _       <- fiber.interrupt
+                          next    <- ZIO.scoped(cache.get(key))
+                          cleaned <- resource.assertAcquiredOnceAndCleaned
+                        } yield assertTrue(next == 2) && cleaned
+                      }
+                    }
+        } yield result
       }
     ),
     test("contains returns true during ongoing lookup") {
@@ -1863,6 +2031,9 @@ object ScopedCacheSpec extends ZIOSpecDefault {
                   }
                 }
     } yield result
+
+  private def diedWith(message: String)(exit: Exit[Any, Any]): Boolean =
+    exit.causeOption.flatMap(_.dieOption).exists(_.getMessage == message)
 
   private def keyCount(cache: ScopedCache[?, ?, ?]): Int =
     cache.asInstanceOf[ScopedCacheImplementation[?, ?, ?, ?]].keyCount
