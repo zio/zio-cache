@@ -231,10 +231,13 @@ object Cache {
       }
 
     override def get(in: In)(implicit trace: Trace): IO[Error, Value] =
-      ZIO.uninterruptibleMask(implicit res => getUnsafe(in))
+      ZIO.uninterruptibleMask(implicit res => getUnsafe(in, countStats = true))
 
     @tailrec
-    private def getUnsafe(in: In)(implicit restore: ZIO.InterruptibilityRestorer, trace: Trace): IO[Error, Value] = {
+    private def getUnsafe(in: In, countStats: Boolean)(implicit
+      restore: ZIO.InterruptibilityRestorer,
+      trace: Trace
+    ): IO[Error, Value] = {
       val k                              = keyBy(in)
       var key: MapKey[Key]               = null
       var promise: Promise[Error, Value] = null
@@ -248,19 +251,19 @@ object Cache {
       value match {
         case null =>
           trackAccess(key)
-          trackMiss()
+          if (countStats) trackMiss()
           lookupValueOf(in, k, key, promise)
         case MapValue.Pending(key, promise) =>
           trackAccess(key)
-          trackHit()
+          if (countStats) trackHit()
           restore(promise.await)
         case MapValue.Complete(key, exit, _, timeToLive) =>
           trackAccess(key)
           if (hasExpired(timeToLive)) {
             map.remove(k, value)
-            getUnsafe(in)
+            getUnsafe(in, countStats)
           } else {
-            trackHit()
+            if (countStats) trackHit()
             exit
           }
         case MapValue.Refreshing(
@@ -268,7 +271,7 @@ object Cache {
               MapValue.Complete(mapKey, currentResult, _, ttl)
             ) =>
           trackAccess(mapKey)
-          trackHit()
+          if (countStats) trackHit()
           if (hasExpired(ttl)) {
             restore(promiseInProgress.await)
           } else {
@@ -296,7 +299,7 @@ object Cache {
           case completedResult @ MapValue.Complete(_, _, _, ttl) =>
             if (hasExpired(ttl)) {
               map.remove(k, value)
-              getUnsafe(in)
+              getUnsafe(in, countStats = true)
             } else {
               // Only trigger the lookup if we're still the current value, `completedResult`
               lookupValueOf(in, k, completedResult.key, promise).whenDiscard {
@@ -322,28 +325,47 @@ object Cache {
 
     private def lookupValueOf(in: In, key: Key, mapKey: MapKey[Key], promise: Promise[Error, Value])(implicit
       restore: ZIO.InterruptibilityRestorer
-    ): IO[Error, Value] =
+    ): IO[Error, Value] = {
+      def uncached(exit: Exit[Error, Value], forWaiters: IO[Error, Value]): IO[Error, Value] = {
+        // Only undo the entry this lookup belongs to, not one added after an invalidation
+        val current = map.get(key)
+        if (isEntryOf(mapKey, current)) undoLookup(key, current)
+        // The entry is undone first, so that a fiber waiting for the lookup that gets the value again does not wait
+        // for this lookup again
+        promise.unsafe.completeWith(forWaiters)(Unsafe)
+        exit
+      }
+
+      def withResult(exit: Exit[Error, Value]): IO[Error, Value] = {
+        val now       = clock.unsafe.instant()(Unsafe)
+        val completed = MapValue.Complete(mapKey, exit, EntryStats(now), now.plus(timeToLive(exit)))
+
+        // Only store the result if the entry was not invalidated or evicted while the lookup ran. No other
+        // lookup writes an entry with this key, so a failed `replace` means the entry is no longer this one.
+        val current = map.get(key)
+        if (isEntryOf(mapKey, current)) map.replace(key, current, completed)
+        promise.unsafe.done(exit)(Unsafe)
+        exit
+      }
+
       restore(lookup(in))
         .provideEnvironment(environment)
         .exitWith {
-          case exit @ Exit.Failure(c) if c.isInterruptedOnly =>
-            val interrupter = c.interruptOption.getOrElse(fiberId)
-            promise.unsafe.interruptAs(interrupter)(trace, Unsafe)
-            // Only undo the entry this lookup belongs to, not one added after an invalidation
-            val current = map.get(key)
-            if (isEntryOf(mapKey, current)) undoLookup(key, current)
-            exit
-          case exit =>
-            val now       = clock.unsafe.instant()(Unsafe)
-            val completed = MapValue.Complete(mapKey, exit, EntryStats(now), now.plus(timeToLive(exit)))
-
-            // Only store the result if the entry was not invalidated or evicted while the lookup ran. No other
-            // lookup writes an entry with this key, so a failed `replace` means the entry is no longer this one.
-            val current = map.get(key)
-            if (isEntryOf(mapKey, current)) map.replace(key, current, completed)
-            promise.unsafe.done(exit)(Unsafe)
-            exit
+          case exit @ Exit.Failure(c) if c.isInterrupted =>
+            ZIO.descriptorWith { fiber =>
+              // The interruption of this fiber is not the lookup's result, even when a finalizer then failed: the
+              // fibers waiting for the lookup get the value again, without counting it twice. A lookup that is only
+              // interrupted otherwise, e.g. with `ZIO.interrupt`, gives them its exit, which is not cached. Any other
+              // failure, e.g. a `zipPar` whose other side is interrupted, is the lookup's result.
+              val wasInterrupted = fiber.interrupters.nonEmpty
+              if (wasInterrupted)
+                uncached(exit, ZIO.uninterruptibleMask(implicit restore => getUnsafe(in, countStats = false)))
+              else if (c.isInterruptedOnly) uncached(exit, exit)
+              else withResult(exit)
+            }
+          case exit => withResult(exit)
         }
+    }
 
     /**
      * Undoes the entry of an interrupted lookup. An interrupted refresh keeps

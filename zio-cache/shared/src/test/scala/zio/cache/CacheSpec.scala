@@ -362,6 +362,147 @@ object CacheSpec extends ZIOSpecDefault {
           _        <- cache.get(1)
           n        <- calls.get
         } yield assertTrue(contains, n == 2)
+      },
+      test("a get waiting on a lookup is not interrupted when the fiber running the lookup is") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          owner  <- cache.get(1).fork
+          _      <- started.await
+          waiter <- cache.get(1).fork
+          // The waiter counts a hit once it has read the pending entry
+          _     <- cache.cacheStats.repeatUntil(_.hits == 1L).timeout(5.seconds).withClock(Clock.ClockLive)
+          _     <- owner.interrupt
+          exit  <- waiter.await.timeout(5.seconds).withClock(Clock.ClockLive)
+          stats <- cache.cacheStats
+        } yield assertTrue(exit.contains(Exit.succeed(1)), stats.hits == 1L, stats.misses == 1L)
+      },
+      test("a get waiting for the refresh of an expired value gets a value when the refresh is interrupted") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     10.seconds,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 1) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          _       <- cache.get(1)
+          refresh <- cache.refresh(1).fork
+          _       <- started.await
+          _       <- TestClock.adjust(11.seconds)
+          waiter  <- cache.get(1).fork
+          // The waiter counts a hit once it has read the refreshing entry
+          _    <- cache.cacheStats.repeatUntil(_.hits == 1L).timeout(5.seconds).withClock(Clock.ClockLive)
+          _    <- refresh.interrupt
+          exit <- waiter.await.timeout(5.seconds).withClock(Clock.ClockLive)
+          n    <- calls.get
+        } yield assertTrue(exit.contains(Exit.succeed(1)), n == 3)
+      },
+      test("a refresh waiting on a lookup whose fiber is interrupted loads the value") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls
+                         .getAndUpdate(_ + 1)
+                         .flatMap(n => if (n == 0) started.succeed(()) *> ZIO.never else ZIO.succeed(key))
+                     )
+                   )
+          owner   <- cache.get(1).fork
+          _       <- started.await
+          refresh <- cache.refresh(1).fork
+          _ <- refresh.status
+                 .repeatUntil(_.isInstanceOf[Fiber.Status.Suspended])
+                 .timeout(5.seconds)
+                 .withClock(Clock.ClockLive)
+          _     <- owner.interrupt
+          exit  <- refresh.await.timeout(5.seconds).withClock(Clock.ClockLive)
+          value <- cache.get(1)
+        } yield assertTrue(exit.contains(Exit.unit), value == 1)
+      },
+      test("the fibers waiting for a lookup that interrupts itself get its interruption, which is not cached") {
+        for {
+          calls <- Ref.make(0)
+          gate  <- Promise.make[Nothing, Unit]
+          cache <-
+            Cache.make(100, Duration.Infinity, Lookup((_: Int) => calls.update(_ + 1) *> gate.await *> ZIO.interrupt))
+          owner   <- cache.get(1).fork
+          _       <- calls.get.repeatUntil(_ == 1).timeout(5.seconds).withClock(Clock.ClockLive)
+          waiters <- ZIO.foreach((1 to 4).toList)(_ => cache.get(1).fork)
+          // Each waiter counts a hit once it has read the pending entry
+          _        <- cache.cacheStats.repeatUntil(_.hits == 4L).timeout(5.seconds).withClock(Clock.ClockLive)
+          _        <- gate.succeed(())
+          exits    <- ZIO.foreach(owner :: waiters)(_.await).timeout(5.seconds).withClock(Clock.ClockLive)
+          lookups  <- calls.get
+          contains <- cache.contains(1)
+          next     <- cache.get(1).exit
+          after    <- calls.get
+        } yield assertTrue(
+          exits.exists(_.forall(_.isInterrupted)),
+          lookups == 1,
+          !contains,
+          next.isInterrupted,
+          after == 2
+        )
+      },
+      test("a later get does not see the interruption of a lookup whose finalizer fails") {
+        for {
+          calls   <- Ref.make(0)
+          started <- Promise.make[Nothing, Unit]
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) =>
+                       calls.getAndUpdate(_ + 1).flatMap { n =>
+                         if (n == 0)
+                           (started.succeed(()) *> ZIO.never).ensuring(ZIO.die(new RuntimeException("finalizer")))
+                         else ZIO.succeed(key)
+                       }
+                     )
+                   )
+          owner  <- cache.get(1).fork
+          _      <- started.await
+          waiter <- cache.get(1).fork
+          // The waiter counts a hit once it has read the pending entry
+          _      <- cache.cacheStats.repeatUntil(_.hits == 1L).timeout(5.seconds).withClock(Clock.ClockLive)
+          _      <- owner.interrupt
+          waited <- waiter.await.timeout(5.seconds).withClock(Clock.ClockLive)
+          second <- cache.get(1).exit
+        } yield assertTrue(waited.contains(Exit.succeed(1)), second == Exit.succeed(1))
+      },
+      test("a lookup that fails in parallel with an interruption caches its failure") {
+        for {
+          calls <- Ref.make(0)
+          cache <- Cache.make(
+                     100,
+                     Duration.Infinity,
+                     Lookup((key: Int) => calls.update(_ + 1) *> (ZIO.fail("boom") <&> ZIO.never).as(key))
+                   )
+          first  <- cache.get(1).exit
+          second <- cache.get(1).exit
+          n      <- calls.get
+        } yield assertTrue(
+          // The other side of the lookup is interrupted by the fiber running the lookup, which is not interrupted
+          first.causeOption.exists(cause => cause.isInterrupted && cause.failureOption.contains("boom")),
+          second.causeOption.flatMap(_.failureOption).contains("boom"),
+          n == 1
+        )
       }
     )
   )
